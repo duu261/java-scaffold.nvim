@@ -1,0 +1,132 @@
+*java-scaffold.txt*  Java and Spring Boot project scaffolding for Neovim
+
+==============================================================================
+CONTENTS                                         *java-scaffold-contents*
+
+  1. Introduction ......................... |java-scaffold-introduction|
+  2. Configuration ........................ |java-scaffold-configuration|
+  3. Commands ............................. |java-scaffold-commands|
+  4. Java versions ........................ |java-scaffold-java|
+  5. Offline metadata ..................... |java-scaffold-offline|
+
+==============================================================================
+1. INTRODUCTION                              *java-scaffold-introduction*
+
+java-scaffold.nvim creates Maven, Gradle, and Spring Boot projects inside
+Neovim. It can add supported Spring dependencies to an existing pom.xml, open
+generated Java source for normal JDTLS startup when no handoff runs, and pass
+completed projects to an optional handoff command.
+
+Requires Neovim 0.11+ and java. Maven, Gradle, curl/tar, and Telescope are
+needed only by their respective workflows.
+
+==============================================================================
+2. CONFIGURATION                             *java-scaffold-configuration*
+
+>lua
+  require("java_scaffold").setup({
+    group_id = "com.example",
+    artifact_id = "demo",
+    java_version = "auto",
+    java_versions = {},
+    java_homes = {},
+    entry_selector = nil,
+    maven = {
+      command = "mvn",
+      runner_java_version = "auto",
+      project_version = "1.0-SNAPSHOT",
+      timeout = 180000,
+      archetype = {
+        group_id = "org.apache.maven.archetypes",
+        artifact_id = "maven-archetype-quickstart",
+        version = "1.5",
+      },
+    },
+    gradle = {
+      command = "gradle",
+      runner_java_version = "auto",
+      dsl = "kotlin",
+      test_framework = "auto",
+      timeout = 180000,
+      default_project_type = "java-application",
+      project_types = {
+        { id = "java-application", name = "Java application" },
+        { id = "java-library", name = "Java library" },
+        { id = "java-gradle-plugin", name = "Gradle plugin" },
+      },
+    },
+    spring = {
+      metadata_url = "https://start.spring.io",
+      dependencies_url = "https://start.spring.io/dependencies",
+      starter_url = "https://start.spring.io/starter.tgz",
+      project_type = "maven-project",
+      language = "java",
+      packaging = "jar",
+      metadata_timeout = 30000,
+      timeout = 60000,
+    },
+    handoff = {
+      enabled = false,
+      command = nil,
+      required_executables = {},
+    },
+  })
+<
+
+setup() is optional. Defaults apply when it is not called.
+
+==============================================================================
+3. COMMANDS                                      *java-scaffold-commands*
+
+                                                    *:JavaScaffoldMaven*
+:JavaScaffoldMaven
+    Prompt for Maven coordinates and Java version. Generate a Maven quickstart
+    project under the current working directory.
+
+                                                    *:JavaScaffoldSpring*
+:JavaScaffoldSpring
+    Prompt for Spring project coordinates, Java version, and dependencies.
+    Download and extract a Spring Initializr Maven project.
+
+                                                    *:JavaScaffoldGradle*
+:JavaScaffoldGradle
+    Prompt for coordinates, Gradle project type, and Java version. Generate a
+    wrapper-backed Gradle application, library, or Gradle plugin.
+
+                                                    *:JavaScaffoldAddDependency*
+:JavaScaffoldAddDependency
+    Find the nearest pom.xml, detect its Spring Boot version, resolve selected
+    Initializr dependency IDs, and insert non-duplicate dependency blocks.
+    BOM, repository, and annotation-processor entries are excluded in v1.
+
+                                                    *:JavaScaffoldLog*
+:JavaScaffoldLog
+    Open the in-memory operation log.
+
+Run `:checkhealth java_scaffold` to inspect requirements.
+
+==============================================================================
+4. JAVA VERSIONS                                  *java-scaffold-java*
+
+java_version controls project target/toolchain; "auto" selects active Java.
+Maven and Gradle choices include active Java, JDK<version> environment
+variables, java_versions, java_homes, and common JDK install directories.
+Each build system has separate runner_java_version, defaulting to active Java.
+This allows a modern Gradle JVM to target Java 8/11. Known runner homes become
+scoped JAVA_HOME and PATH. Global shell state is unchanged. Wrappers may
+override JAVA_HOME; health and creation report actual runner Java. Spring
+choices come from metadata for selected Boot version.
+
+Successful creation emits User JavaScaffoldProjectCreated. Event data contains
+project_dir and entry_file. Handoff command arguments may contain {project}
+and {file}; without placeholders, project path is appended.
+
+==============================================================================
+5. OFFLINE METADATA                            *java-scaffold-offline*
+
+Initializr project metadata and Boot-version dependency coordinates are cached
+under stdpath("cache")/java-scaffold.nvim after successful requests. Fetch
+failures use those files. Cached data supports dependency insertion offline;
+new project archives still require network access.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

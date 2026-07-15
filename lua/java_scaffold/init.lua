@@ -1,0 +1,413 @@
+local M = {}
+
+local function notify_error(message)
+  require("java_scaffold.log").add("ERROR", message)
+  vim.notify("java-scaffold.nvim: " .. message, vim.log.levels.ERROR)
+end
+
+local function notify(message, level)
+  vim.notify("java-scaffold.nvim: " .. message, level or vim.log.levels.INFO)
+end
+
+local function finish_project(project_dir)
+  local config = require("java_scaffold.config").get()
+  local entry_file = require("java_scaffold.project").entry(project_dir)
+  if config.entry_selector then
+    local ok, selected = pcall(config.entry_selector, project_dir, entry_file)
+    if ok and type(selected) == "string" and selected ~= "" then
+      entry_file = selected
+    elseif not ok then
+      require("java_scaffold.log").add("WARN", "entry_selector failed: " .. tostring(selected))
+    end
+  end
+  vim.cmd.cd(vim.fn.fnameescape(project_dir))
+  local event_ok, event_error = pcall(vim.api.nvim_exec_autocmds, "User", {
+    pattern = "JavaScaffoldProjectCreated",
+    data = { project_dir = project_dir, entry_file = entry_file },
+  })
+  if not event_ok then
+    require("java_scaffold.log").add(
+      "WARN",
+      "project-created event failed: " .. tostring(event_error)
+    )
+  end
+  require("java_scaffold.handoff").open(project_dir, config.handoff, function(err, opened)
+    if opened then
+      notify("project ready: " .. project_dir)
+      return
+    end
+    if err then
+      require("java_scaffold.log").add("WARN", err)
+      notify(err .. "; opening in current Neovim", vim.log.levels.WARN)
+    end
+    vim.cmd.edit(vim.fn.fnameescape(entry_file))
+  end, entry_file)
+end
+
+local function choose_java(available, configured, fallback, callback)
+  if #available == 0 then
+    callback(nil, "no Java versions available")
+    return
+  end
+  local java = require("java_scaffold.java")
+  local selected_default = java.default(configured, available, fallback)
+  require("java_scaffold.picker").select_one(available, {
+    prompt = "Java version",
+    default = selected_default,
+  }, function(selected)
+    callback(selected)
+  end)
+end
+
+local function prompt_coordinates(group_default, artifact_default, callback)
+  local picker = require("java_scaffold.picker")
+  picker.input("Group ID: ", group_default, function(group_id)
+    if not group_id then
+      return
+    end
+    picker.input("Artifact ID: ", artifact_default, function(artifact_id)
+      if not artifact_id then
+        return
+      end
+      local err = require("java_scaffold.maven").validate(group_id, artifact_id)
+      if err then
+        notify_error(err)
+        return
+      end
+      callback(group_id, artifact_id)
+    end)
+  end)
+end
+
+function M.setup(opts)
+  require("java_scaffold.config").setup(opts)
+end
+
+function M.new_maven()
+  local config = require("java_scaffold.config").get()
+  prompt_coordinates(config.group_id, config.artifact_id, function(group_id, artifact_id)
+    local java = require("java_scaffold.java")
+    local versions = java.installed(config.java_versions, config.java_homes)
+    choose_java(versions, config.java_version, java.active(), function(java_version, java_error)
+      if java_error then
+        notify_error(java_error)
+        return
+      end
+      if not java_version then
+        return
+      end
+      local runner_version = java.default(config.maven.runner_java_version, versions, java.active())
+      local runner_env = java.runner_env(runner_version, config.java_homes)
+      notify("detecting Maven runtime")
+      java.maven_runtime_async(config.maven.command, function(detected_runtime)
+        local maven_runtime = detected_runtime or java.active()
+        if maven_runtime and tonumber(java_version) > tonumber(maven_runtime) then
+          notify(
+            string.format(
+              "Java %s exceeds Maven runner Java %s; configure Maven runner JDK or toolchain",
+              java_version,
+              maven_runtime
+            ),
+            vim.log.levels.WARN
+          )
+        end
+        notify("creating Maven project with Java " .. java_version)
+        require("java_scaffold.maven").create({
+          command = config.maven.command,
+          cwd = vim.fn.getcwd(),
+          group_id = group_id,
+          artifact_id = artifact_id,
+          version = config.maven.project_version,
+          java_version = java_version,
+          archetype = config.maven.archetype,
+          timeout = config.maven.timeout,
+          env = runner_env,
+        }, function(err, project_dir)
+          if err then
+            notify_error(err)
+            return
+          end
+          finish_project(project_dir)
+        end)
+      end, config.maven.timeout, runner_env)
+    end)
+  end)
+end
+
+function M.new_gradle()
+  local config = require("java_scaffold.config").get()
+  prompt_coordinates(config.group_id, config.artifact_id, function(group_id, artifact_id)
+    require("java_scaffold.picker").select_one(config.gradle.project_types, {
+      prompt = "Gradle project type",
+      default = config.gradle.default_project_type,
+    }, function(project_type)
+      if not project_type then
+        return
+      end
+      local java = require("java_scaffold.java")
+      local versions = java.installed(config.java_versions, config.java_homes)
+      choose_java(versions, config.java_version, java.active(), function(java_version, java_error)
+        if java_error then
+          notify_error(java_error)
+          return
+        end
+        if not java_version then
+          return
+        end
+        local runner_version =
+          java.default(config.gradle.runner_java_version, versions, java.active())
+        local runner_env = java.runner_env(runner_version, config.java_homes)
+        notify("detecting Gradle runtime")
+        java.gradle_runtime_async(config.gradle.command, function(detected_runtime)
+          if detected_runtime and tonumber(java_version) > tonumber(detected_runtime) then
+            notify(
+              string.format(
+                "Java %s exceeds Gradle runner Java %s; configure Gradle toolchain",
+                java_version,
+                detected_runtime
+              ),
+              vim.log.levels.WARN
+            )
+          end
+          notify("creating Gradle project with Java " .. java_version)
+          require("java_scaffold.gradle").create({
+            command = config.gradle.command,
+            cwd = vim.fn.getcwd(),
+            group_id = group_id,
+            artifact_id = artifact_id,
+            java_version = java_version,
+            project_type = project_type.id,
+            dsl = config.gradle.dsl,
+            test_framework = config.gradle.test_framework,
+            timeout = config.gradle.timeout,
+            env = runner_env,
+          }, function(err, project_dir)
+            if err then
+              notify_error(err)
+              return
+            end
+            finish_project(project_dir)
+          end)
+        end, config.gradle.timeout, runner_env)
+      end)
+    end)
+  end)
+end
+
+local function fetch_client(callback)
+  local config = require("java_scaffold.config").get()
+  require("java_scaffold.metadata").fetch_cached(
+    config.spring.metadata_url,
+    require("java_scaffold.metadata").cache_path("metadata"),
+    nil,
+    callback,
+    require("java_scaffold.metadata").is_client
+  )
+end
+
+local function fetch_catalog(boot_version, callback)
+  local config = require("java_scaffold.config").get()
+  local url = config.spring.dependencies_url .. "?bootVersion=" .. vim.uri_encode(boot_version)
+  require("java_scaffold.metadata").fetch_cached(
+    url,
+    require("java_scaffold.metadata").cache_path("dependencies", boot_version),
+    nil,
+    callback,
+    require("java_scaffold.metadata").is_catalog
+  )
+end
+
+function M.new_spring()
+  notify("loading Spring Initializr metadata")
+  fetch_client(function(metadata_error, client)
+    if metadata_error then
+      notify_error(metadata_error)
+      return
+    end
+    local config = require("java_scaffold.config").get()
+    local metadata = require("java_scaffold.metadata")
+    prompt_coordinates(
+      config.group_id,
+      metadata.default(client, "artifactId", "demo"),
+      function(group_id, artifact_id)
+        local versions = metadata.values(client, "javaVersion")
+        choose_java(
+          versions,
+          config.java_version,
+          metadata.default(client, "javaVersion", versions[#versions]),
+          function(java_version, java_error)
+            if java_error then
+              notify_error(java_error)
+              return
+            end
+            if not java_version then
+              return
+            end
+            local boot_version = metadata.default(client, "bootVersion")
+            fetch_catalog(boot_version, function(catalog_error, catalog)
+              if catalog_error then
+                notify_error(catalog_error)
+                return
+              end
+              local dependencies = {}
+              for _, item in ipairs(metadata.flatten_dependencies(client)) do
+                if catalog.dependencies[item.id] then
+                  dependencies[#dependencies + 1] = item
+                end
+              end
+              require("java_scaffold.picker").select_many(dependencies, {
+                prompt = "Spring dependencies",
+                format_item = function(item)
+                  return string.format("%s  [%s]", item.name, item.group)
+                end,
+              }, function(selected)
+                if not selected then
+                  return
+                end
+                local dependency_ids = vim.tbl_map(function(item)
+                  return item.id
+                end, selected)
+                notify("creating Spring project with Java " .. java_version)
+                require("java_scaffold.spring").create({
+                  url = config.spring.starter_url,
+                  cwd = vim.fn.getcwd(),
+                  group_id = group_id,
+                  artifact_id = artifact_id,
+                  java_version = java_version,
+                  boot_version = boot_version,
+                  dependencies = dependency_ids,
+                  project_type = config.spring.project_type,
+                  language = config.spring.language,
+                  packaging = config.spring.packaging,
+                  timeout = config.spring.timeout,
+                }, function(err, project_dir)
+                  if err then
+                    notify_error(err)
+                    return
+                  end
+                  finish_project(project_dir)
+                end)
+              end)
+            end)
+          end
+        )
+      end
+    )
+  end)
+end
+
+local function nearest_pom()
+  local buffer_path = vim.api.nvim_buf_get_name(0)
+  local start = buffer_path ~= "" and vim.fs.dirname(buffer_path) or vim.fn.getcwd()
+  return vim.fs.find("pom.xml", { upward = true, path = start })[1]
+end
+
+local function read_pom(path)
+  local buffer = vim.fn.bufnr(path)
+  if buffer ~= -1 and vim.api.nvim_buf_is_loaded(buffer) then
+    return vim.api.nvim_buf_get_lines(buffer, 0, -1, false), buffer, vim.bo[buffer].modified
+  end
+  local ok, lines = pcall(vim.fn.readfile, path)
+  if not ok then
+    return nil
+  end
+  return lines
+end
+
+local function save_pom(path, lines, buffer, was_modified)
+  if buffer then
+    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
+    if was_modified then
+      return false
+    end
+    vim.api.nvim_buf_call(buffer, function()
+      vim.cmd("silent write")
+    end)
+    return true
+  end
+  vim.fn.writefile(lines, path)
+  return true
+end
+
+function M.add_dependency()
+  local pom_path = nearest_pom()
+  if not pom_path then
+    notify_error("no pom.xml found in current directory or parents")
+    return
+  end
+  local lines = read_pom(pom_path)
+  if not lines then
+    notify_error("cannot read " .. pom_path)
+    return
+  end
+  local boot_version = require("java_scaffold.pom").spring_boot_version(lines)
+  if not boot_version then
+    notify_error("Spring Boot version not found in pom.xml")
+    return
+  end
+
+  notify("loading dependencies for Spring Boot " .. boot_version)
+  fetch_client(function(client_error, client)
+    if client_error then
+      notify_error(client_error)
+      return
+    end
+    fetch_catalog(boot_version, function(catalog_error, catalog)
+      if catalog_error then
+        notify_error(catalog_error)
+        return
+      end
+      local metadata = require("java_scaffold.metadata")
+      local choices = {}
+      for _, item in ipairs(metadata.flatten_dependencies(client)) do
+        local coordinate = catalog.dependencies and catalog.dependencies[item.id]
+        if metadata.is_direct(coordinate) then
+          choices[#choices + 1] = item
+        end
+      end
+      require("java_scaffold.picker").select_many(choices, {
+        prompt = "Add Spring dependencies",
+        format_item = function(item)
+          return string.format("%s  [%s]", item.name, item.group)
+        end,
+      }, function(selected)
+        if not selected or #selected == 0 then
+          return
+        end
+        local ids = vim.tbl_map(function(item)
+          return item.id
+        end, selected)
+        local dependencies, missing = metadata.resolve(catalog, ids)
+        if #missing > 0 then
+          notify_error("dependency coordinates unavailable: " .. table.concat(missing, ", "))
+          return
+        end
+        local latest_lines, buffer, was_modified = read_pom(pom_path)
+        if not latest_lines then
+          notify_error("cannot reread " .. pom_path)
+          return
+        end
+        local latest_boot_version = require("java_scaffold.pom").spring_boot_version(latest_lines)
+        if latest_boot_version ~= boot_version then
+          notify_error("pom.xml Spring Boot version changed; run command again")
+          return
+        end
+        local updated, added, insert_error =
+          require("java_scaffold.pom").insert(latest_lines, dependencies)
+        if insert_error then
+          notify_error(insert_error)
+          return
+        end
+        if added == 0 then
+          notify("selected dependencies already exist")
+          return
+        end
+        local saved = save_pom(pom_path, updated, buffer, was_modified)
+        local suffix = saved and "" or " (buffer left unsaved)"
+        notify(string.format("added %d dependencies%s", added, suffix))
+      end)
+    end)
+  end)
+end
+
+return M

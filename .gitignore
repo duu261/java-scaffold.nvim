@@ -1,0 +1,4 @@
+deps/
+doc/tags
+*.tmp
+nvim.log
