@@ -142,12 +142,18 @@ function M.select_runtime(opts)
   return selected(candidate)
 end
 
+local function java_choices(config)
+  local java = require("java_scaffold.java")
+  local runtimes = M.java_runtimes()
+  local versions = java.installed(config.java_versions, config.java_homes, runtimes)
+  return java, runtimes, versions
+end
+
 function M.new_maven()
   local config = require("java_scaffold.config").get()
   prompt_coordinates(config.group_id, config.artifact_id, function(group_id, artifact_id)
-    local java = require("java_scaffold.java")
-    local versions = java.installed(config.java_versions, config.java_homes)
-    choose_java(versions, config.java_version, java.active(), function(java_version, java_error)
+    local java, runtimes, versions = java_choices(config)
+    choose_java(versions, config.java_version, runtimes.active, function(java_version, java_error)
       if java_error then
         notify_error(java_error)
         return
@@ -155,11 +161,12 @@ function M.new_maven()
       if not java_version then
         return
       end
-      local runner_version = java.default(config.maven.runner_java_version, versions, java.active())
-      local runner_env = java.runner_env(runner_version, config.java_homes)
+      local runner_version =
+        java.default(config.maven.runner_java_version, versions, runtimes.active)
+      local runner_env = java.runner_env(runner_version, config.java_homes, runtimes.homes)
       notify("detecting Maven runtime")
       java.maven_runtime_async(config.maven.command, function(detected_runtime)
-        local maven_runtime = detected_runtime or java.active()
+        local maven_runtime = detected_runtime or runtimes.active
         if maven_runtime and tonumber(java_version) > tonumber(maven_runtime) then
           notify(
             string.format(
@@ -204,9 +211,8 @@ function M.new_gradle()
       if not project_type then
         return
       end
-      local java = require("java_scaffold.java")
-      local versions = java.installed(config.java_versions, config.java_homes)
-      choose_java(versions, config.java_version, java.active(), function(java_version, java_error)
+      local java, runtimes, versions = java_choices(config)
+      choose_java(versions, config.java_version, runtimes.active, function(java_version, java_error)
         if java_error then
           notify_error(java_error)
           return
@@ -215,8 +221,8 @@ function M.new_gradle()
           return
         end
         local runner_version =
-          java.default(config.gradle.runner_java_version, versions, java.active())
-        local runner_env = java.runner_env(runner_version, config.java_homes)
+          java.default(config.gradle.runner_java_version, versions, runtimes.active)
+        local runner_env = java.runner_env(runner_version, config.java_homes, runtimes.homes)
         notify("detecting Gradle runtime")
         java.gradle_runtime_async(config.gradle.command, function(detected_runtime)
           if detected_runtime and tonumber(java_version) > tonumber(detected_runtime) then

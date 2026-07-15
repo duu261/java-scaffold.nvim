@@ -8,6 +8,8 @@ describe("plugin surface", function()
   after_each(function()
     package.loaded["java_scaffold.config"] = nil
     package.loaded["java_scaffold.java"] = nil
+    package.loaded["java_scaffold.maven"] = nil
+    package.loaded["java_scaffold.picker"] = nil
   end)
 
   it("registers lazy user commands", function()
@@ -102,5 +104,81 @@ describe("plugin surface", function()
       executable = "/jdk/21/bin/java",
     }, plugin.select_runtime({ min_version = 21, prefer_active = true }))
     assert.is_nil(plugin.select_runtime({ min_version = 27 }))
+  end)
+
+  it("threads one Java runtime snapshot through Maven creation", function()
+    local active_calls = 0
+    local discovery_calls = 0
+    local received = {}
+    package.loaded["java_scaffold"] = nil
+    package.loaded["java_scaffold.config"] = {
+      get = function()
+        return {
+          group_id = "com.example",
+          artifact_id = "demo",
+          java_versions = {},
+          java_homes = {},
+          java_version = "23",
+          maven = {
+            command = "mvn",
+            runner_java_version = "auto",
+            project_version = "0.1.0-SNAPSHOT",
+            wrapper = false,
+            archetype = {},
+            timeout = 1000,
+          },
+        }
+      end,
+    }
+    package.loaded["java_scaffold.java"] = {
+      active = function()
+        active_calls = active_calls + 1
+        return "23"
+      end,
+      discover_homes = function()
+        discovery_calls = discovery_calls + 1
+        return { ["23"] = "/jdk/23" }
+      end,
+      installed = function(_, _, runtimes)
+        received.installed = runtimes
+        return { "23" }
+      end,
+      default = function(_, _, fallback)
+        received.fallback = fallback
+        return "23"
+      end,
+      runner_env = function(_, _, homes)
+        received.runner_homes = homes
+        return { JAVA_HOME = "/jdk/23", PATH = "/jdk/23/bin" }
+      end,
+      maven_runtime_async = function(_, callback)
+        callback("23")
+      end,
+    }
+    package.loaded["java_scaffold.picker"] = {
+      input = function(_, default, callback)
+        callback(default)
+      end,
+      select_one = function(items, _, callback)
+        callback(items[1])
+      end,
+    }
+    package.loaded["java_scaffold.maven"] = {
+      validate = function()
+        return nil
+      end,
+      create = function(opts)
+        received.create = opts
+      end,
+    }
+
+    require("java_scaffold").new_maven()
+
+    assert.equals(1, active_calls)
+    assert.equals(1, discovery_calls)
+    assert.same({ active = "23", homes = { ["23"] = "/jdk/23" } }, received.installed)
+    assert.equals("23", received.fallback)
+    assert.same({ ["23"] = "/jdk/23" }, received.runner_homes)
+    assert.equals("/jdk/23", received.create.env.JAVA_HOME)
   end)
 end)

@@ -40,6 +40,100 @@ describe("Java runtime selection", function()
     package.loaded["java_scaffold.process"] = nil
   end)
 
+  it("bounds synchronous Java version probes", function()
+    local home = vim.fn.tempname()
+    local java_path = vim.fs.joinpath(home, "bin", "java")
+    vim.fn.mkdir(vim.fs.dirname(java_path), "p")
+    vim.fn.writefile({ "java" }, java_path)
+    vim.uv.fs_chmod(java_path, 493)
+    local saved_system = vim.system
+    local waited
+    vim.system = function(command)
+      assert.same({ java_path, "-version" }, command)
+      return {
+        wait = function(_, timeout)
+          waited = timeout
+          return { code = 124, stdout = "", stderr = "" }
+        end,
+      }
+    end
+
+    local ok, version = pcall(java.home_version, home)
+    vim.system = saved_system
+    vim.fn.delete(home, "rf")
+
+    assert.is_true(ok)
+    assert.is_nil(version)
+    assert.equals(1000, waited)
+  end)
+
+  it("deduplicates Java homes by real path", function()
+    local first = "/virtual/jdk-17"
+    local second = "/virtual/jdk-23"
+    local saved_home_version = java.home_version
+    local saved_realpath = vim.uv.fs_realpath
+    local probes = 0
+    java.home_version = function(path)
+      if path == first or path == second then
+        probes = probes + 1
+        return "23"
+      end
+      return nil
+    end
+    vim.uv.fs_realpath = function(path)
+      if path == first or path == second then
+        return "/physical/jdk-23"
+      end
+      return path
+    end
+
+    local ok, homes = pcall(java.discover_homes, { ["17"] = first, ["23"] = second })
+    java.home_version = saved_home_version
+    vim.uv.fs_realpath = saved_realpath
+
+    assert.is_true(ok)
+    assert.equals(1, probes)
+    assert.equals(second, homes["23"])
+  end)
+
+  it("uses a provided runtime snapshot without probing", function()
+    local saved_active = java.active
+    local saved_discover_homes = java.discover_homes
+    local active_calls = 0
+    local discovery_calls = 0
+    java.active = function()
+      active_calls = active_calls + 1
+      return "99"
+    end
+    java.discover_homes = function()
+      discovery_calls = discovery_calls + 1
+      return { ["99"] = "/jdk/99" }
+    end
+    local runtimes = {
+      active = "23",
+      homes = { ["17"] = "/jdk/17", ["23"] = "/jdk/23" },
+    }
+
+    local ok, result = pcall(function()
+      local versions = java.installed({ "21" }, {}, runtimes)
+      local selected = java.default("auto", versions, runtimes.active)
+      return {
+        versions = versions,
+        selected = selected,
+        env = java.runner_env(selected, {}, runtimes.homes),
+      }
+    end)
+    java.active = saved_active
+    java.discover_homes = saved_discover_homes
+
+    assert.is_true(ok)
+    assert.equals(0, active_calls)
+    assert.equals(0, discovery_calls)
+    assert.same({ "17", "21", "23" }, result.versions)
+    assert.equals("23", result.selected)
+    assert.equals("/jdk/23", result.env.JAVA_HOME)
+  end)
+
   it("ignores nonnumeric configured Java versions", function()
     local versions = java.installed({ "latest", "21" })
 

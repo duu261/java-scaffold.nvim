@@ -1,4 +1,5 @@
 local M = {}
+local VERSION_PROBE_TIMEOUT = 1000
 
 function M.parse_version(output)
   if type(output) ~= "string" then
@@ -31,7 +32,7 @@ local function version_from(command)
   if not started then
     return nil
   end
-  local result = process:wait()
+  local result = process:wait(VERSION_PROBE_TIMEOUT)
   if result.code ~= 0 then
     return nil
   end
@@ -113,8 +114,18 @@ end
 
 function M.discover_homes(configured_homes)
   local homes = {}
+  local probed = {}
   local function add(path, declared_version)
-    local version = M.home_version(path)
+    local realpath = type(path) == "string" and vim.uv.fs_realpath(path) or nil
+    local key = realpath or path
+    if type(key) ~= "string" or key == "" then
+      return
+    end
+    local version = probed[key]
+    if version == nil then
+      version = M.home_version(path) or false
+      probed[key] = version
+    end
     if not version then
       return
     end
@@ -156,7 +167,7 @@ function M.discover_homes(configured_homes)
   return homes
 end
 
-function M.installed(extra, configured_homes)
+function M.installed(extra, configured_homes, runtimes)
   local seen = {}
   local versions = {}
   local function add(version)
@@ -167,8 +178,17 @@ function M.installed(extra, configured_homes)
     end
   end
 
-  add(M.active())
-  for version in pairs(M.discover_homes(configured_homes)) do
+  local active
+  local homes
+  if type(runtimes) == "table" then
+    active = runtimes.active
+    homes = runtimes.homes or {}
+  else
+    active = M.active()
+    homes = M.discover_homes(configured_homes)
+  end
+  add(active)
+  for version in pairs(homes) do
     add(version)
   end
   for _, version in ipairs(extra or {}) do
@@ -180,12 +200,12 @@ function M.installed(extra, configured_homes)
   return versions
 end
 
-function M.home(version, configured_homes)
-  return M.discover_homes(configured_homes)[tostring(version)]
+function M.home(version, configured_homes, homes)
+  return (homes or M.discover_homes(configured_homes))[tostring(version)]
 end
 
-function M.runner_env(version, configured_homes)
-  local home = M.home(version, configured_homes)
+function M.runner_env(version, configured_homes, homes)
+  local home = M.home(version, configured_homes, homes)
   if not home then
     return nil
   end
@@ -200,7 +220,10 @@ function M.default(configured, available, fallback)
   if configured and configured ~= "auto" and vim.tbl_contains(available, configured) then
     return configured
   end
-  local active = M.active()
+  local active = fallback
+  if active == nil then
+    active = M.active()
+  end
   if active and vim.tbl_contains(available, active) then
     return active
   end
