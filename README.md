@@ -125,6 +125,7 @@ Results stay cached until `setup()` runs or `java_runtimes({ refresh = true })` 
 | `:JavaScaffoldSpring` | Create Spring Boot project |
 | `:JavaScaffoldAddDependency` | Add Spring dependencies to nearest `pom.xml` |
 | `:JavaScaffoldLog` | Show internal operation log |
+| `:JavaScaffoldHealth` | Load the plugin and run its health check |
 
 Creation runs in the current working directory. Each generator builds inside a private staging directory, validates expected build files, then promotes the finished project without deleting an existing target. Wizards prompt for coordinates and Java, plus project type for Gradle or dependencies for Spring.
 

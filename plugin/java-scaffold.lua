@@ -22,3 +22,11 @@ end, { desc = "Add Spring dependencies to pom.xml", force = true })
 vim.api.nvim_create_user_command("JavaScaffoldLog", function()
   require("java_scaffold.log").show()
 end, { desc = "Show java-scaffold.nvim log", force = true })
+
+vim.api.nvim_create_user_command("JavaScaffoldHealth", function()
+  local ok, err = pcall(vim.cmd.checkhealth, "java_scaffold")
+  if not ok then
+    require("java_scaffold.log").add("ERROR", "health check failed: " .. tostring(err))
+    vim.notify("java-scaffold.nvim: health check failed", vim.log.levels.ERROR)
+  end
+end, { desc = "Check java-scaffold.nvim health", force = true })

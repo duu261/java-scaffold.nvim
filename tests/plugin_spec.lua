@@ -11,6 +11,7 @@ describe("plugin surface", function()
     assert.equals(2, vim.fn.exists(":JavaScaffoldSpring"))
     assert.equals(2, vim.fn.exists(":JavaScaffoldAddDependency"))
     assert.equals(2, vim.fn.exists(":JavaScaffoldLog"))
+    assert.equals(2, vim.fn.exists(":JavaScaffoldHealth"))
   end)
 
   it("loads public API without setup", function()

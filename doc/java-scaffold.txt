@@ -127,7 +127,11 @@ and {file}; without placeholders, the project path is appended.
 :JavaScaffoldLog
     Open the in-memory operation log.
 
-Run :checkhealth java_scaffold to inspect requirements.
+                                                    *:JavaScaffoldHealth*
+:JavaScaffoldHealth
+    Load a lazy plugin instance and run :checkhealth java_scaffold.
+
+Run :checkhealth java_scaffold directly when the plugin is already loaded.
 
 ==============================================================================
 5. JAVA VERSIONS                                  *java-scaffold-java*
