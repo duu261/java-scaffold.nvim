@@ -1,6 +1,6 @@
 # java-scaffold.nvim
 
-Create Maven, Gradle, and Spring Boot projects, add Spring dependencies, then land in the new project or on generated Java source - without leaving Neovim.
+Create Maven, Gradle, and Spring Boot projects, add Spring dependencies, and open the generated project or Java source without leaving Neovim.
 
 ## Requirements
 
@@ -88,13 +88,32 @@ require("java_scaffold").setup({
 })
 ```
 
-`java_version = "auto"` controls project target/toolchain and defaults to active user Java. Maven and Gradle offer active Java, `JDK<version>` environments, configured homes, and JDKs discovered under common Linux, macOS, SDKMAN, asdf, and Maven JDK directories. Build JVM stays separate through each workflow's `runner_java_version`; its default is active Java. This lets Gradle run on a modern JVM while targeting Java 8/11, matching IDE behavior. Known runner homes become scoped `JAVA_HOME` and `PATH`; global shell state stays unchanged. Wrappers that reset `JAVA_HOME` can still override this, so health and creation report actual runner Java. Spring projects use only versions supported by selected Initializr Boot metadata; unsupported active Java falls back to Initializr's default.
+`java_version = "auto"` selects the project compiler/toolchain target and defaults to the active Java version. Maven and Gradle choices include active Java, `JDK<version>` environment variables, configured homes, and JDKs discovered under common Linux, macOS, SDKMAN, asdf, and Maven directories.
+
+Build JVM selection stays independent through each workflow's `runner_java_version`. This lets Gradle run on a modern JVM while targeting Java 8 or 11. Known runner homes become scoped `JAVA_HOME` and `PATH` values; global shell state stays unchanged. Wrappers may override `JAVA_HOME`, so health checks and project creation report the detected runner Java.
+
+Spring choices come from Initializr metadata for the selected Boot version. Unsupported active Java versions fall back to Initializr's default.
+
+## Public API
+
+`require("java_scaffold").setup(opts)` applies configuration and clears cached runtime discovery. Calling `setup()` is optional.
+
+`require("java_scaffold").java_runtimes(opts)` exposes the same JDK discovery used by the plugin:
+
+```lua
+{
+  active = "23",
+  homes = { ["23"] = "/path/to/jdk-23" },
+}
+```
+
+Results stay cached until `setup()` runs or `java_runtimes({ refresh = true })` requests fresh discovery. Each call returns a deep copy, so caller changes cannot mutate the cache.
 
 ## Project coverage
 
 - Maven quickstart: conventional console project and tests
 - Gradle: Java application, library, or Gradle plugin; Kotlin DSL; JUnit 4 for Java 8/11 and Jupiter for 17+
-- Spring Boot: current Initializr Boot/Java/dependency compatibility
+- Spring Boot: Boot versions, Java versions, and dependencies supplied by Initializr metadata
 - Existing Spring project: safe direct dependency insertion into nearest root `pom.xml`
 
 ## Usage
@@ -107,9 +126,9 @@ require("java_scaffold").setup({
 | `:JavaScaffoldAddDependency` | Add Spring dependencies to nearest `pom.xml` |
 | `:JavaScaffoldLog` | Show internal operation log |
 
-Creation runs in current working directory. Generation uses a private staging directory, validates build files, then promotes the finished project without deleting an existing target. Wizard prompts for coordinates and Java, plus project type for Gradle or dependencies for Spring.
+Creation runs in the current working directory. Each generator builds inside a private staging directory, validates expected build files, then promotes the finished project without deleting an existing target. Wizards prompt for coordinates and Java, plus project type for Gradle or dependencies for Spring.
 
-Without handoff, plugin opens generated application source when available. This naturally triggers a normal Java filetype/JDTLS setup. It does not own or duplicate JDTLS configuration. Successful creation emits `User JavaScaffoldProjectCreated` with `data.project_dir` and `data.entry_file`.
+Without handoff, the plugin opens generated application source when available. This triggers the existing Java filetype or JDTLS setup; the plugin does not manage JDTLS. Successful creation emits `User JavaScaffoldProjectCreated` with `data.project_dir` and `data.entry_file`.
 
 Optional handoff can invoke any external project opener:
 
@@ -135,7 +154,7 @@ Successful Initializr responses are cached under `stdpath("cache")/java-scaffold
 
 ## Dependency insertion limits
 
-V1 inserts dependencies representable by one normal Maven `<dependency>` block. Initializr entries needing a BOM import, custom repository, or annotation-processor/plugin wiring are hidden from this command because plain insertion would create a broken build. They remain available during new Spring project creation, where Initializr generates required Maven configuration.
+V1 inserts only Initializr dependencies representable by one normal Maven `<dependency>` block. Entries requiring a BOM import, custom repository, or annotation-processor/plugin wiring are hidden because direct insertion would create a broken build. They remain available during Spring project creation, where Initializr generates the required Maven configuration.
 
 Run `:checkhealth java_scaffold` when something fails.
 

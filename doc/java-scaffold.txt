@@ -5,20 +5,21 @@ CONTENTS                                         *java-scaffold-contents*
 
   1. Introduction ......................... |java-scaffold-introduction|
   2. Configuration ........................ |java-scaffold-configuration|
-  3. Commands ............................. |java-scaffold-commands|
-  4. Java versions ........................ |java-scaffold-java|
-  5. Offline metadata ..................... |java-scaffold-offline|
+  3. Public API ........................... |java-scaffold-api|
+  4. Commands ............................. |java-scaffold-commands|
+  5. Java versions ........................ |java-scaffold-java|
+  6. Offline metadata ..................... |java-scaffold-offline|
 
 ==============================================================================
 1. INTRODUCTION                              *java-scaffold-introduction*
 
-java-scaffold.nvim creates Maven, Gradle, and Spring Boot projects inside
-Neovim. It can add supported Spring dependencies to an existing pom.xml, open
-generated Java source for normal JDTLS startup when no handoff runs, and pass
-completed projects to an optional handoff command.
+java-scaffold.nvim creates Maven, Gradle, and Spring Boot projects from
+Neovim. It can add supported Spring dependencies to an existing pom.xml,
+open generated Java source for an existing Java or JDTLS setup, and pass a
+completed project to an optional handoff command.
 
-Requires Neovim 0.11+ and java. Maven, Gradle, curl/tar, and Telescope are
-needed only by their respective workflows.
+Neovim 0.11+ and java are always required. Maven, Gradle, curl, tar, and
+Telescope are needed only by their respective workflows.
 
 ==============================================================================
 2. CONFIGURATION                             *java-scaffold-configuration*
@@ -76,7 +77,30 @@ needed only by their respective workflows.
 setup() is optional. Defaults apply when it is not called.
 
 ==============================================================================
-3. COMMANDS                                      *java-scaffold-commands*
+3. PUBLIC API                                      *java-scaffold-api*
+
+setup([{opts}])                              *java-scaffold.setup()*
+    Apply configuration. Calling setup() without options uses defaults.
+    Every call clears cached Java runtime discovery.
+
+java_runtimes([{opts}])                *java-scaffold.java_runtimes()*
+    Return the Java runtimes discovered for plugin and editor integration:
+>
+      {
+        active = "23",
+        homes = { ["23"] = "/path/to/jdk-23" },
+      }
+<
+    active is the active Java major version, or nil when unavailable. homes
+    maps Java major versions to JDK homes. Discovery stays cached until
+    setup() runs or opts.refresh is true. Every call returns a deep copy.
+
+Successful creation emits User JavaScaffoldProjectCreated. Event data
+contains project_dir and entry_file. Handoff arguments may contain {project}
+and {file}; without placeholders, the project path is appended.
+
+==============================================================================
+4. COMMANDS                                      *java-scaffold-commands*
 
                                                     *:JavaScaffoldMaven*
 :JavaScaffoldMaven
@@ -93,7 +117,7 @@ setup() is optional. Defaults apply when it is not called.
     Prompt for coordinates, Gradle project type, and Java version. Generate a
     wrapper-backed Gradle application, library, or Gradle plugin.
 
-                                                    *:JavaScaffoldAddDependency*
+                                              *:JavaScaffoldAddDependency*
 :JavaScaffoldAddDependency
     Find the nearest pom.xml, detect its Spring Boot version, resolve selected
     Initializr dependency IDs, and insert non-duplicate dependency blocks.
@@ -103,30 +127,30 @@ setup() is optional. Defaults apply when it is not called.
 :JavaScaffoldLog
     Open the in-memory operation log.
 
-Run `:checkhealth java_scaffold` to inspect requirements.
+Run :checkhealth java_scaffold to inspect requirements.
 
 ==============================================================================
-4. JAVA VERSIONS                                  *java-scaffold-java*
+5. JAVA VERSIONS                                  *java-scaffold-java*
 
-java_version controls project target/toolchain; "auto" selects active Java.
-Maven and Gradle choices include active Java, JDK<version> environment
-variables, java_versions, java_homes, and common JDK install directories.
-Each build system has separate runner_java_version, defaulting to active Java.
-This allows a modern Gradle JVM to target Java 8/11. Known runner homes become
-scoped JAVA_HOME and PATH. Global shell state is unchanged. Wrappers may
-override JAVA_HOME; health and creation report actual runner Java. Spring
-choices come from metadata for selected Boot version.
+java_version selects the project compiler or toolchain target; "auto" uses
+active Java. Maven and Gradle choices include active Java, JDK<version>
+environment variables, java_versions, java_homes, and common JDK install
+directories.
 
-Successful creation emits User JavaScaffoldProjectCreated. Event data contains
-project_dir and entry_file. Handoff command arguments may contain {project}
-and {file}; without placeholders, project path is appended.
+Each build system has a separate runner_java_version that defaults to active
+Java. This allows a modern Gradle JVM to target Java 8 or 11. Known runner
+homes become scoped JAVA_HOME and PATH values; global shell state remains
+unchanged. Wrappers may override JAVA_HOME, so health checks and project
+creation report the detected runner Java.
+
+Spring choices come from Initializr metadata for the selected Boot version.
 
 ==============================================================================
-5. OFFLINE METADATA                            *java-scaffold-offline*
+6. OFFLINE METADATA                            *java-scaffold-offline*
 
-Initializr project metadata and Boot-version dependency coordinates are cached
-under stdpath("cache")/java-scaffold.nvim after successful requests. Fetch
-failures use those files. Cached data supports dependency insertion offline;
-new project archives still require network access.
+Initializr project metadata and Boot-version dependency coordinates are
+cached under stdpath("cache")/java-scaffold.nvim after successful requests.
+Fetch failures use those files. Cached data supports dependency insertion
+offline; new project archives still require network access.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

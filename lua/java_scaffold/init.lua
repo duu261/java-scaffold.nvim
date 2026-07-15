@@ -1,4 +1,5 @@
 local M = {}
+local runtime_cache
 
 local function notify_error(message)
   require("java_scaffold.log").add("ERROR", message)
@@ -81,6 +82,23 @@ end
 
 function M.setup(opts)
   require("java_scaffold.config").setup(opts)
+  runtime_cache = nil
+end
+
+function M.java_runtimes(opts)
+  opts = opts or {}
+  if opts.refresh then
+    runtime_cache = nil
+  end
+  if not runtime_cache then
+    local java = require("java_scaffold.java")
+    local config = require("java_scaffold.config").get()
+    runtime_cache = {
+      active = java.active(),
+      homes = java.discover_homes(config.java_homes),
+    }
+  end
+  return vim.deepcopy(runtime_cache)
 end
 
 function M.new_maven()
