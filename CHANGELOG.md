@@ -4,6 +4,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## Unreleased
 
+## 0.5.0 - 2026-07-16
+
 ### Added
 
 - Stable callback-based Lua API for headless Maven, Gradle, and Spring project creation.
