@@ -247,13 +247,8 @@ describe("Initializr metadata", function()
     local nested = vim.fs.joinpath(cache, "server")
     vim.fn.mkdir(nested, "p")
     vim.fn.writefile({ "cached" }, vim.fs.joinpath(nested, "metadata.json"))
-    local original_cache_dir = metadata.cache_dir
-    metadata.cache_dir = function()
-      return cache
-    end
 
-    local ok, err = metadata.clear_cache()
-    metadata.cache_dir = original_cache_dir
+    local ok, err = metadata.clear_cache(cache)
 
     assert.is_true(ok)
     assert.is_nil(err)
