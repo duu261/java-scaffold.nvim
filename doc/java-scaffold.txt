@@ -21,8 +21,8 @@ can pass a completed project to an optional handoff command.
 
 Guided wizards collect destination, coordinates, package, Java, and
 workflow-specific choices before a final review. Maven Central single
-selection includes a version picker. Telescope provides searchable pickers;
-native vim.ui remains the dependency-free fallback.
+selection includes version and scope pickers. Telescope provides searchable
+pickers; native vim.ui remains the dependency-free fallback.
 
 Neovim 0.11+ is the only core requirement. java, Maven, Gradle, curl, and tar
 are needed only by their respective workflows. Telescope and external
@@ -197,7 +197,9 @@ then choose [Done].
     Find the nearest pom.xml. For Spring Boot, resolve selected Initializr
     dependency IDs. For plain Maven, search Maven Central and select results
     showing groupId:artifactId plus latest version. A single artifact opens a
-    newest-first version picker; multi-select keeps the shown latest versions.
+    newest-first version picker followed by compile (default), test, provided,
+    or runtime scope selection. Compile emits no scope element. Multi-select
+    keeps shown latest versions and compile scope without another prompt.
     Insert non-duplicate dependency blocks. BOM, repository,
     annotation-processor, and Maven Central pom-packaging entries are excluded.
     If Initializr no longer

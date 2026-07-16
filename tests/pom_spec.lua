@@ -61,6 +61,25 @@ describe("POM editing", function()
     }, updated)
   end)
 
+  it("emits only non-compile dependency scopes", function()
+    local updated, added = pom.insert({ "<project>", "</project>" }, {
+      {
+        group_id = "org.junit.jupiter",
+        artifact_id = "junit-jupiter",
+        version = "5.13.4",
+        scope = "test",
+      },
+      { group_id = "com.example", artifact_id = "compile-lib", version = "1.0", scope = "compile" },
+      { group_id = "com.example", artifact_id = "default-lib", version = "1.0" },
+    })
+
+    assert.equals(3, added)
+    assert.is_truthy(table.concat(updated, "\n"):find("<scope>test</scope>", 1, true))
+    assert.is_falsy(table.concat(updated, "\n"):find("<scope>compile</scope>", 1, true))
+    assert.equals("      <version>5.13.4</version>", updated[6])
+    assert.equals("      <scope>test</scope>", updated[7])
+  end)
+
   it("handles a multiline root project tag", function()
     local lines = {
       '<?xml version="1.0" encoding="UTF-8"?>',

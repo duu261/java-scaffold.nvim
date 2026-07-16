@@ -341,7 +341,18 @@ local function choose_maven_versions(pom_path, selected)
         end
         local chosen = vim.deepcopy(dependency)
         chosen.version = version
-        insert_maven_dependencies(pom_path, { chosen })
+        require("java_scaffold.picker").select_one({ "compile", "test", "provided", "runtime" }, {
+          prompt = "Maven dependency scope",
+          default = "compile",
+        }, function(scope)
+          if not scope then
+            return
+          end
+          if scope ~= "compile" then
+            chosen.scope = scope
+          end
+          insert_maven_dependencies(pom_path, { chosen })
+        end)
       end)
     end
   )

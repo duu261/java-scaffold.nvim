@@ -311,9 +311,22 @@ describe("plugin surface", function()
         callback(items)
       end,
       select_one = function(items, opts, callback)
-        assert.same({ "33.4.8-jre", "33.4.7-jre" }, items)
-        assert.equals("33.4.8-jre", opts.default)
-        callback("33.4.7-jre")
+        if opts.prompt == "Maven Central version" then
+          assert.same({ "33.4.8-jre", "33.4.7-jre" }, items)
+          assert.equals("33.4.8-jre", opts.default)
+          callback("33.4.7-jre")
+          return
+        end
+        assert.equals("Maven dependency scope", opts.prompt)
+        assert.same({ "compile", "test", "provided", "runtime" }, items)
+        assert.equals("compile", opts.default)
+        vim.fn.writefile({
+          "<project>",
+          "  <artifactId>demo</artifactId>",
+          "  <name>changed while scope picker was open</name>",
+          "</project>",
+        }, pom_path)
+        callback("test")
       end,
     }
 
@@ -328,9 +341,68 @@ describe("plugin surface", function()
         artifact_id = "guava",
         version = "33.4.7-jre",
         packaging = "jar",
+        scope = "test",
       },
     }, received.dependencies)
-    assert.is_truthy(table.concat(received.lines, "\n"):find("changed while picker", 1, true))
+    assert.is_truthy(table.concat(received.lines, "\n"):find("changed while scope picker", 1, true))
+  end)
+
+  it("cancels Maven Central insertion when scope selection is cancelled", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    local original = { "<project>", "  <artifactId>demo</artifactId>", "</project>" }
+    vim.fn.writefile(original, pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local prompts = {}
+
+    package.loaded["java_scaffold.pom"] = {
+      spring_boot_version = function()
+        return nil
+      end,
+      insert = function()
+        error("pom insert must not run")
+      end,
+    }
+    package.loaded["java_scaffold.maven"] = {
+      validate = function()
+        error("coordinate validation must not run")
+      end,
+    }
+    package.loaded["java_scaffold.maven_central"] = {
+      search = function(_, callback)
+        callback(nil, {
+          { group_id = "org.junit.jupiter", artifact_id = "junit-jupiter", version = "5.13.4" },
+        })
+      end,
+      versions = function(_, _, callback)
+        callback(nil, { "5.13.4" })
+      end,
+    }
+    package.loaded["java_scaffold.picker"] = {
+      input = function(_, _, callback)
+        callback("junit-jupiter")
+      end,
+      select_many = function(items, _, callback)
+        callback(items)
+      end,
+      select_one = function(items, opts, callback)
+        prompts[#prompts + 1] = opts.prompt
+        if opts.prompt == "Maven Central version" then
+          callback(items[1])
+        else
+          callback(nil)
+        end
+      end,
+    }
+
+    require("java_scaffold").add_dependency()
+
+    assert.same({ "Maven Central version", "Maven dependency scope" }, prompts)
+    assert.same(original, vim.fn.readfile(pom_path))
   end)
 
   it("keeps Spring catalog insertion for Boot poms", function()

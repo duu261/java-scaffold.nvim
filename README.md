@@ -8,7 +8,7 @@ Safely scaffold Maven, Gradle, and Spring Boot projects in Neovim, add Maven dep
 - Maven quickstart and web application archetypes with optional Maven Wrapper generation.
 - Wrapper-backed Java, Kotlin, or Groovy Gradle applications, libraries, and plugins using Kotlin or Groovy build scripts.
 - Spring Boot Maven and Gradle projects using Initializr-provided metadata and dependency choices.
-- Safe Maven dependency insertion from Spring catalogs or Maven Central, including single-artifact version selection.
+- Safe Maven dependency insertion from Spring catalogs or Maven Central, including single-artifact version and scope selection.
 - Separate project Java target and Maven or Gradle runner JVM selection.
 - Private staging, target collision protection, structural POM edits, and offline metadata fallback.
 - Telescope or native `vim.ui` pickers, including multi-select dependency workflows.
@@ -211,7 +211,7 @@ Run `:JavaScaffoldClearCache` when cached Initializr data becomes stale. Next me
 
 Dependency insertion exposes only entries representable by one normal Maven `<dependency>` block. Entries requiring BOM import, custom repository, or annotation-processor wiring stay hidden. Those entries remain available during new Spring project creation, where Initializr can generate complete Maven configuration.
 
-For a plain Maven pom, `:JavaScaffoldAddDependency` prompts for a Maven Central query and shows `groupId:artifactId` plus latest version. Selecting one artifact opens a newest-first version picker defaulted to that latest version. Multi-select keeps each artifact's latest version. Malformed result rows are skipped without discarding valid neighbors, and `pom` artifacts remain excluded. Ranking comes from Maven Central. Rerun the command to refine a query. Search has no cache or offline fallback.
+For a plain Maven pom, `:JavaScaffoldAddDependency` prompts for a Maven Central query and shows `groupId:artifactId` plus latest version. Selecting one artifact opens a newest-first version picker defaulted to that latest version, then a scope picker with `compile` as the default and `test`, `provided`, or `runtime` as alternatives. Compile scope emits no `<scope>` element. Multi-select keeps each artifact's latest version and compile scope without another prompt. Malformed result rows are skipped without discarding valid neighbors, and `pom` artifacts remain excluded. Ranking comes from Maven Central. Rerun the command to refine a query. Search has no cache or offline fallback.
 
 No Boot versions are hardcoded into the picker. Old-version lookup happens only when the dependency command reads an existing `pom.xml`.
 
