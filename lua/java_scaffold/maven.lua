@@ -147,91 +147,65 @@ local function wrapper_args()
 end
 
 function M.create(opts, callback)
-  local validation_error = M.validate(opts.group_id, opts.artifact_id)
-  if validation_error then
-    callback(validation_error)
-    return
-  end
-  local package_error =
-    M.validate_package(opts.package_name or M.package_name(opts.group_id, opts.artifact_id))
-  if package_error then
-    callback(package_error)
-    return
-  end
+  require("java_scaffold.generator").run(opts, M.adapter, callback)
+end
 
-  local target = vim.fs.joinpath(opts.cwd, opts.artifact_id)
-  if vim.uv.fs_stat(target) then
-    callback("target already exists: " .. target)
-    return
-  end
-
-  local fs = require("java_scaffold.fs")
-  local staging, staging_error = fs.make_staging(opts.cwd)
-  if not staging then
-    callback(staging_error)
-    return
-  end
-
-  local staged_project = vim.fs.joinpath(staging, opts.artifact_id)
-  local args = M.build_args(vim.tbl_extend("force", opts, { output_directory = staging }))
-  local process = require("java_scaffold.process")
-
-  local function abort(message)
-    fs.cleanup(staging)
-    callback(message)
-  end
-
-  local function promote()
-    local promoted, promote_error = fs.promote(staged_project, target)
-    fs.cleanup(staging)
-    if not promoted then
-      callback(promote_error)
-      return
+M.adapter = {
+  validate = function(opts)
+    local err = M.validate(opts.group_id, opts.artifact_id)
+    if err then
+      return err
     end
-    callback(nil, target)
-  end
+    return M.validate_package(opts.package_name or M.package_name(opts.group_id, opts.artifact_id))
+  end,
 
-  local function generate_wrapper()
-    process.run(
-      opts.command,
-      wrapper_args(),
-      { cwd = staged_project, timeout = opts.timeout, env = opts.env },
-      function(result)
-        if result.code ~= 0 then
-          abort("Maven Wrapper generation failed: " .. process.detail(result))
-          return
-        end
-        for _, relative in ipairs(wrapper_files) do
-          if not vim.uv.fs_stat(vim.fs.joinpath(staged_project, relative)) then
-            abort("Maven Wrapper output missing " .. relative)
+  execute = function(opts, staging, callback)
+    local staged_project = vim.fs.joinpath(staging, opts.artifact_id)
+    local args = M.build_args(vim.tbl_extend("force", opts, { output_directory = staging }))
+    local process = require("java_scaffold.process")
+
+    local function generate_wrapper()
+      process.run(
+        opts.command,
+        wrapper_args(),
+        { cwd = staged_project, timeout = opts.timeout, env = opts.env },
+        function(result)
+          if result.code ~= 0 then
+            callback("Maven Wrapper generation failed: " .. process.detail(result))
             return
           end
+          for _, relative in ipairs(wrapper_files) do
+            if not vim.uv.fs_stat(vim.fs.joinpath(staged_project, relative)) then
+              callback("Maven Wrapper output missing " .. relative)
+              return
+            end
+          end
+          callback(nil)
         end
-        promote()
+      )
+    end
+
+    process.run(
+      opts.command,
+      args,
+      { cwd = opts.cwd, timeout = opts.timeout, env = opts.env },
+      function(result)
+        if result.code ~= 0 then
+          callback("Maven project creation failed: " .. process.detail(result))
+          return
+        end
+        if not vim.uv.fs_stat(vim.fs.joinpath(staged_project, "pom.xml")) then
+          callback("Maven exited successfully but no pom.xml was created")
+          return
+        end
+        if opts.wrapper then
+          generate_wrapper()
+          return
+        end
+        callback(nil)
       end
     )
-  end
-
-  process.run(
-    opts.command,
-    args,
-    { cwd = opts.cwd, timeout = opts.timeout, env = opts.env },
-    function(result)
-      if result.code ~= 0 then
-        abort("Maven project creation failed: " .. process.detail(result))
-        return
-      end
-      if not vim.uv.fs_stat(vim.fs.joinpath(staged_project, "pom.xml")) then
-        abort("Maven exited successfully but no pom.xml was created")
-        return
-      end
-      if opts.wrapper then
-        generate_wrapper()
-        return
-      end
-      promote()
-    end
-  )
-end
+  end,
+}
 
 return M
