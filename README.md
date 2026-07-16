@@ -1,8 +1,8 @@
-# java-scaffold.nvim
+# ☕ java-scaffold.nvim
 
 Create Maven, Gradle, and Spring Boot projects safely from Neovim, then open generated Java source or hand the project to another tool.
 
-## Features
+## ✨ Features
 
 - Maven quickstart projects with optional Maven Wrapper generation.
 - Wrapper-backed Gradle applications, libraries, and Gradle plugins.
@@ -12,7 +12,7 @@ Create Maven, Gradle, and Spring Boot projects safely from Neovim, then open gen
 - Private staging, target collision protection, structural POM edits, and offline metadata fallback.
 - Generated Java entry opening, `User JavaScaffoldProjectCreated`, and optional post-create handoff.
 
-## Requirements
+## 📦 Requirements
 
 | Tool | Needed for |
 | --- | --- |
@@ -27,7 +27,7 @@ Create Maven, Gradle, and Spring Boot projects safely from Neovim, then open gen
 
 Missing workflow-specific tools do not affect unrelated generators. Without Telescope, the plugin uses `vim.ui`.
 
-## Installation
+## 🚀 Installation
 
 Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
@@ -50,7 +50,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 `version = "*"` follows tagged releases. Remove it to follow `main`.
 
-## Quick start
+## ⚡ Quick start
 
 1. Install plugin and restart Neovim.
 2. Run `:JavaScaffoldHealth` to load a lazy installation and check available tools.
@@ -150,7 +150,7 @@ Discovery resolves duplicate JDK paths, caps each version probe at one second, a
 
 `gradle.test_framework = "auto"` uses JUnit 4 for Java 8 or 11 and JUnit Jupiter for Java 17+.
 
-## Safety behavior
+## 🛡️ Safety behavior
 
 - Every generator builds inside a private sibling staging directory.
 - Promotion happens only after expected build files exist.
@@ -222,7 +222,7 @@ V1 owns Maven, Gradle, and Spring project creation plus Maven-based Spring depen
 
 The plugin deliberately does not run applications, format code, execute tests, edit Gradle dependencies, or manage JDTLS. Existing tools remain responsible for those jobs.
 
-## Troubleshooting
+## 🩺 Troubleshooting
 
 1. Run `:JavaScaffoldHealth`. Use this command instead of direct `:checkhealth java_scaffold` when lazy-loaded plugin has not loaded yet.
 2. Run `:JavaScaffoldLog` for process arguments and detailed failure context.
