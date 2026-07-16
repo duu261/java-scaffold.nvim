@@ -445,4 +445,296 @@ describe("POM editing", function()
     assert.equals(1, removed)
     assert.same({ "<project>", "  <dependencies>", "  </dependencies>", "</project>" }, updated)
   end)
+
+  describe("reactor metadata", function()
+    it("reads direct reactor coordinates and pom packaging", function()
+      local meta, err = pom.reactor({
+        "<project>",
+        "  <groupId>com.example</groupId>",
+        "  <artifactId>parent</artifactId>",
+        "  <version>1.0.0</version>",
+        "  <packaging>pom</packaging>",
+        "</project>",
+      })
+
+      assert.is_nil(err)
+      assert.same({
+        group_id = "com.example",
+        artifact_id = "parent",
+        version = "1.0.0",
+        packaging = "pom",
+      }, meta)
+    end)
+
+    it("falls back to the root parent for inherited literal groupId and version", function()
+      local meta, err = pom.reactor({
+        "<project>",
+        "  <parent>",
+        "    <groupId>com.example</groupId>",
+        "    <artifactId>company-parent</artifactId>",
+        "    <version>2.0.0</version>",
+        "  </parent>",
+        "  <artifactId>reactor</artifactId>",
+        "  <packaging>pom</packaging>",
+        "</project>",
+      })
+
+      assert.is_nil(err)
+      assert.equals("com.example", meta.group_id)
+      assert.equals("reactor", meta.artifact_id)
+      assert.equals("2.0.0", meta.version)
+      assert.equals("pom", meta.packaging)
+    end)
+
+    it("rejects missing or non-pom packaging", function()
+      local missing, missing_err = pom.reactor({
+        "<project>",
+        "  <groupId>com.example</groupId>",
+        "  <artifactId>parent</artifactId>",
+        "  <version>1.0.0</version>",
+        "</project>",
+      })
+      local jar, jar_err = pom.reactor({
+        "<project>",
+        "  <groupId>com.example</groupId>",
+        "  <artifactId>parent</artifactId>",
+        "  <version>1.0.0</version>",
+        "  <packaging>jar</packaging>",
+        "</project>",
+      })
+
+      assert.is_nil(missing)
+      assert.matches("packaging", missing_err)
+      assert.is_nil(jar)
+      assert.matches("packaging", jar_err)
+    end)
+
+    it("rejects missing, duplicate, property-backed, and nested coordinate fields", function()
+      local no_artifact, no_artifact_err = pom.reactor({
+        "<project>",
+        "  <groupId>com.example</groupId>",
+        "  <version>1.0.0</version>",
+        "  <packaging>pom</packaging>",
+        "</project>",
+      })
+      local duplicate, duplicate_err = pom.reactor({
+        "<project>",
+        "  <groupId>com.example</groupId>",
+        "  <artifactId>parent</artifactId>",
+        "  <artifactId>other</artifactId>",
+        "  <version>1.0.0</version>",
+        "  <packaging>pom</packaging>",
+        "</project>",
+      })
+      local property_backed, property_err = pom.reactor({
+        "<project>",
+        "  <groupId>com.example</groupId>",
+        "  <artifactId>parent</artifactId>",
+        "  <version>${revision}</version>",
+        "  <packaging>pom</packaging>",
+        "</project>",
+      })
+      local nested_xml, nested_err = pom.reactor({
+        "<project>",
+        "  <groupId><nested/></groupId>",
+        "  <artifactId>parent</artifactId>",
+        "  <version>1.0.0</version>",
+        "  <packaging>pom</packaging>",
+        "</project>",
+      })
+      local profile_nested, profile_err = pom.reactor({
+        "<project>",
+        "  <groupId>com.example</groupId>",
+        "  <artifactId>parent</artifactId>",
+        "  <version>1.0.0</version>",
+        "  <packaging>pom</packaging>",
+        "  <profiles>",
+        "    <profile>",
+        "      <groupId>ignored</groupId>",
+        "      <version>9.9.9</version>",
+        "    </profile>",
+        "  </profiles>",
+        "</project>",
+      })
+
+      assert.is_nil(no_artifact)
+      assert.matches("artifactId", no_artifact_err)
+      assert.is_nil(duplicate)
+      assert.matches("duplicate", duplicate_err)
+      assert.is_nil(property_backed)
+      assert.matches("property", property_err)
+      assert.is_nil(nested_xml)
+      assert.matches("nested", nested_err)
+      assert.is_nil(profile_err)
+      assert.equals("com.example", profile_nested.group_id)
+      assert.equals("1.0.0", profile_nested.version)
+    end)
+
+    it("rejects compact root project XML for reactor inspection", function()
+      local compact = table.concat({
+        "<project>",
+        "<groupId>com.example</groupId>",
+        "<artifactId>p</artifactId>",
+        "<version>1</version>",
+        "<packaging>pom</packaging>",
+        "</project>",
+      })
+      local meta, err = pom.reactor({ compact })
+
+      assert.is_nil(meta)
+      assert.matches("compact", err)
+    end)
+  end)
+
+  describe("module insertion", function()
+    it(
+      "appends one module to an existing root modules block with surrounding bytes unchanged",
+      function()
+        local lines = {
+          "<project>",
+          "  <artifactId>parent</artifactId>",
+          "  <!-- keep -->",
+          "  <modules>",
+          "    <module>existing</module>",
+          "  </modules>",
+          "  <profiles>",
+          "    <profile>",
+          "      <modules>",
+          "        <module>profile-only</module>",
+          "      </modules>",
+          "    </profile>",
+          "  </profiles>",
+          "</project>",
+        }
+        local updated, count, err = pom.insert_module(lines, "child")
+
+        assert.is_nil(err)
+        assert.equals(1, count)
+        assert.same({
+          "<project>",
+          "  <artifactId>parent</artifactId>",
+          "  <!-- keep -->",
+          "  <modules>",
+          "    <module>existing</module>",
+          "    <module>child</module>",
+          "  </modules>",
+          "  <profiles>",
+          "    <profile>",
+          "      <modules>",
+          "        <module>profile-only</module>",
+          "      </modules>",
+          "    </profile>",
+          "  </profiles>",
+          "</project>",
+        }, updated)
+      end
+    )
+
+    it("creates a root modules block when absent with matching indentation", function()
+      local updated, count, err = pom.insert_module({
+        "<project>",
+        "  <artifactId>parent</artifactId>",
+        "</project>",
+      }, "child")
+
+      assert.is_nil(err)
+      assert.equals(1, count)
+      assert.same({
+        "<project>",
+        "  <artifactId>parent</artifactId>",
+        "  <modules>",
+        "    <module>child</module>",
+        "  </modules>",
+        "</project>",
+      }, updated)
+    end)
+
+    it("ignores profile and plugin modules and does not insert into them", function()
+      local lines = {
+        "<project>",
+        "  <build>",
+        "    <plugins>",
+        "      <plugin>",
+        "        <configuration>",
+        "          <modules>",
+        "            <module>plugin-mod</module>",
+        "          </modules>",
+        "        </configuration>",
+        "      </plugin>",
+        "    </plugins>",
+        "  </build>",
+        "  <profiles>",
+        "    <profile>",
+        "      <modules>",
+        "        <module>profile-mod</module>",
+        "      </modules>",
+        "    </profile>",
+        "  </profiles>",
+        "</project>",
+      }
+      local updated, count = pom.insert_module(lines, "child")
+
+      assert.equals(1, count)
+      assert.equals("  <modules>", updated[20])
+      assert.equals("    <module>child</module>", updated[21])
+      assert.equals("  </modules>", updated[22])
+      assert.equals("            <module>plugin-mod</module>", updated[7])
+      assert.equals("        <module>profile-mod</module>", updated[16])
+    end)
+
+    it("returns unchanged lines and count 0 for an already declared module", function()
+      local lines = {
+        "<project>",
+        "  <modules>",
+        "    <module>child</module>",
+        "  </modules>",
+        "</project>",
+      }
+      local updated, count, err = pom.insert_module(lines, "child")
+
+      assert.is_nil(err)
+      assert.equals(0, count)
+      assert.same(lines, updated)
+    end)
+
+    it("rejects self-closing, compact, multiple root modules, and shared-line modules", function()
+      local self_closing, _, self_err = pom.insert_module({
+        "<project>",
+        "  <modules/>",
+        "</project>",
+      }, "child")
+      local _, _, compact_err = pom.insert_module({
+        "<project>",
+        "  <modules><module>a</module></modules>",
+        "</project>",
+      }, "child")
+      local _, _, multiple_err = pom.insert_module({
+        "<project>",
+        "  <modules>",
+        "    <module>a</module>",
+        "  </modules>",
+        "  <modules>",
+        "    <module>b</module>",
+        "  </modules>",
+        "</project>",
+      }, "child")
+      local _, _, shared_err = pom.insert_module({
+        "<project>",
+        "  <modules>",
+        "    <module>a</module><module>b</module>",
+        "  </modules>",
+        "</project>",
+      }, "child")
+
+      assert.same({
+        "<project>",
+        "  <modules/>",
+        "</project>",
+      }, self_closing)
+      assert.matches("self%-closing", self_err)
+      assert.matches("compact", compact_err)
+      assert.matches("multiple", multiple_err)
+      assert.matches("sharing lines", shared_err)
+    end)
+  end)
 end)

@@ -402,4 +402,323 @@ function M.insert(lines, dependencies)
   return updated, added
 end
 
+local function is_property(value)
+  return type(value) == "string" and value:match("^%${[^}]+}$") ~= nil
+end
+
+local function reactor_structure(lines)
+  local positions = structure(lines)
+  if not positions.project_close then
+    return nil, "pom.xml has no closing project element"
+  end
+  if positions.project_open == positions.project_close then
+    return nil, "compact one-line project XML is not supported"
+  end
+
+  local raw_xml = table.concat(lines, "\n")
+  local xml = mask_comments(raw_xml)
+  local stack = {}
+  local project = {}
+  local parent = {}
+  local line_number = 1
+  local previous_position = 1
+
+  for position, closing, qualified_name, attributes, finish in
+    xml:gmatch("()<(%/?)([%w_:.-]+)([^>]*)>()")
+  do
+    local _, newlines = xml:sub(previous_position, position - 1):gsub("\n", "\n")
+    line_number = line_number + newlines
+    previous_position = position
+
+    local name = qualified_name:match("([^:]+)$")
+    if closing == "/" then
+      local node = stack[#stack]
+      if not node or node.name ~= name then
+        return nil, "malformed pom.xml element nesting"
+      end
+      table.remove(stack)
+
+      if node.field and node.target then
+        local content = raw_xml:sub(node.content_start, position - 1)
+        if mask_comments(content):find("<", 1, true) then
+          return nil, "nested XML in reactor " .. node.field .. " is not supported"
+        end
+        local value = content:match("^%s*(.-)%s*$")
+        if not value or value == "" then
+          return nil, "empty reactor " .. node.field .. " is not supported"
+        end
+        if node.target[node.field] ~= nil then
+          return nil, "duplicate reactor " .. node.field .. " is not supported"
+        end
+        node.target[node.field] = value
+      end
+    else
+      local owner = stack[#stack]
+      local self_closing = attributes:match("/%s*$") ~= nil
+      local kind
+      if name == "project" and not owner then
+        kind = "project"
+      elseif name == "parent" and owner and owner.kind == "project" then
+        kind = "parent"
+      end
+
+      if not self_closing then
+        local node = {
+          name = name,
+          kind = kind,
+          content_start = finish,
+        }
+        if
+          owner
+          and owner.kind == "project"
+          and (
+            name == "groupId"
+            or name == "artifactId"
+            or name == "version"
+            or name == "packaging"
+          )
+        then
+          node.field = name == "groupId" and "group_id"
+            or (name == "artifactId" and "artifact_id" or name)
+          node.target = project
+        elseif
+          owner
+          and owner.kind == "parent"
+          and (name == "groupId" or name == "artifactId" or name == "version")
+        then
+          node.field = name == "groupId" and "group_id"
+            or (name == "artifactId" and "artifact_id" or "version")
+          node.target = parent
+        end
+        stack[#stack + 1] = node
+      elseif
+        owner
+        and (
+          (
+            owner.kind == "project"
+            and (
+              name == "groupId"
+              or name == "artifactId"
+              or name == "version"
+              or name == "packaging"
+            )
+          )
+          or (
+            owner.kind == "parent"
+            and (name == "groupId" or name == "artifactId" or name == "version")
+          )
+        )
+      then
+        return nil, "self-closing reactor " .. name .. " is not supported"
+      end
+    end
+  end
+
+  if #stack > 0 then
+    return nil, "pom.xml has unclosed elements"
+  end
+
+  return {
+    project = project,
+    parent = parent,
+  }
+end
+
+function M.reactor(lines)
+  local fields, err = reactor_structure(lines)
+  if not fields then
+    return nil, err
+  end
+
+  local project = fields.project
+  local parent = fields.parent
+
+  if not project.artifact_id then
+    return nil, "reactor artifactId is missing"
+  end
+  if is_property(project.artifact_id) then
+    return nil, "reactor artifactId property is not supported"
+  end
+
+  local group_id = project.group_id or parent.group_id
+  local version = project.version or parent.version
+  if not group_id then
+    return nil, "reactor groupId is missing"
+  end
+  if not version then
+    return nil, "reactor version is missing"
+  end
+  if is_property(group_id) or is_property(project.group_id) or is_property(parent.group_id) then
+    return nil, "reactor groupId property is not supported"
+  end
+  if is_property(version) or is_property(project.version) or is_property(parent.version) then
+    return nil, "reactor version property is not supported"
+  end
+
+  if not project.packaging then
+    return nil, "reactor packaging is missing (jar default is not eligible)"
+  end
+  if is_property(project.packaging) then
+    return nil, "reactor packaging property is not supported"
+  end
+  if project.packaging ~= "pom" then
+    return nil, "reactor packaging must be pom"
+  end
+
+  return {
+    group_id = group_id,
+    artifact_id = project.artifact_id,
+    version = version,
+    packaging = project.packaging,
+  }
+end
+
+local function modules_structure(lines)
+  local positions = structure(lines)
+  if not positions.project_close then
+    return nil, "pom.xml has no closing project element"
+  end
+  if positions.project_open == positions.project_close then
+    return nil, "compact one-line project/modules XML is not supported"
+  end
+
+  local raw_xml = table.concat(lines, "\n")
+  local xml = mask_comments(raw_xml)
+  local stack = {}
+  local modules = {}
+  local root_modules
+  local root_modules_seen = false
+  local line_number = 1
+  local previous_position = 1
+
+  for position, closing, qualified_name, attributes, finish in
+    xml:gmatch("()<(%/?)([%w_:.-]+)([^>]*)>()")
+  do
+    local _, newlines = xml:sub(previous_position, position - 1):gsub("\n", "\n")
+    line_number = line_number + newlines
+    previous_position = position
+
+    local name = qualified_name:match("([^:]+)$")
+    if closing == "/" then
+      local node = stack[#stack]
+      if not node or node.name ~= name then
+        return nil, "malformed pom.xml element nesting"
+      end
+      table.remove(stack)
+
+      if node.kind == "module" then
+        local content = raw_xml:sub(node.content_start, position - 1)
+        if mask_comments(content):find("<", 1, true) then
+          return nil, "nested XML in module element is not supported"
+        end
+        local value = content:match("^%s*(.-)%s*$")
+        if not value or value == "" then
+          return nil, "empty module element is not supported"
+        end
+        local parent = stack[#stack]
+        if parent and parent.kind == "root_modules" and parent.start_line == line_number then
+          return nil, "compact one-line project/modules XML is not supported"
+        end
+        local line_start = raw_xml:sub(1, node.start_byte - 1):match(".*\n()") or 1
+        local line_finish = raw_xml:find("\n", finish, true) or (#raw_xml + 1)
+        if
+          not raw_xml:sub(line_start, node.start_byte - 1):match("^%s*$")
+          or not raw_xml:sub(finish, line_finish - 1):match("^%s*$")
+        then
+          return nil, "module elements sharing lines with other XML are not supported"
+        end
+        modules[#modules + 1] = value
+      elseif node.kind == "root_modules" then
+        if node.start_line == line_number then
+          return nil, "compact one-line project/modules XML is not supported"
+        end
+        node.close_line = line_number
+        root_modules = node
+      end
+    else
+      local owner = stack[#stack]
+      local self_closing = attributes:match("/%s*$") ~= nil
+      local kind
+      if name == "project" and not owner then
+        kind = "project"
+      elseif name == "modules" and owner and owner.kind == "project" then
+        if root_modules_seen then
+          return nil, "multiple root modules elements are not supported"
+        end
+        root_modules_seen = true
+        if self_closing then
+          return nil, "self-closing root modules element is not supported"
+        end
+        kind = "root_modules"
+      elseif name == "module" and owner and owner.kind == "root_modules" then
+        if self_closing then
+          return nil, "self-closing module element is not supported"
+        end
+        kind = "module"
+      end
+
+      if not self_closing then
+        stack[#stack + 1] = {
+          name = name,
+          kind = kind,
+          start_line = line_number,
+          start_byte = position,
+          content_start = finish,
+        }
+      end
+    end
+  end
+
+  if #stack > 0 then
+    return nil, "pom.xml has unclosed elements"
+  end
+
+  return {
+    project_close = positions.project_close,
+    root_modules = root_modules,
+    modules = modules,
+  }
+end
+
+function M.insert_module(lines, module_name)
+  local updated = vim.deepcopy(lines)
+  if type(module_name) ~= "string" or module_name == "" then
+    return updated, 0, "module name must be a non-empty string"
+  end
+
+  local info, err = modules_structure(updated)
+  if not info then
+    return updated, 0, err
+  end
+
+  for _, existing in ipairs(info.modules) do
+    if existing == module_name then
+      return updated, 0
+    end
+  end
+
+  local escaped = escape_xml(module_name)
+  local additions = {}
+  local close_line
+  if info.root_modules then
+    close_line = info.root_modules.close_line
+    local close_indent = updated[close_line]:match("^%s*") or ""
+    additions[1] = close_indent .. "  <module>" .. escaped .. "</module>"
+  else
+    close_line = info.project_close
+    local close_indent = updated[close_line]:match("^%s*") or ""
+    local block_indent = close_indent .. "  "
+    additions = {
+      block_indent .. "<modules>",
+      block_indent .. "  <module>" .. escaped .. "</module>",
+      block_indent .. "</modules>",
+    }
+  end
+
+  for offset, line in ipairs(additions) do
+    table.insert(updated, close_line + offset - 1, line)
+  end
+  return updated, 1
+end
+
 return M
