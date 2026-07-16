@@ -4,6 +4,15 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- Stable callback-based Lua API for headless Maven, Gradle, and Spring project creation.
+- Programmatic root Maven dependency add, upgrade, outdated inspection, and removal with explicit POM paths and no UI.
+
+### Changed
+
+- Shared one buffer-aware POM read/write boundary between interactive and programmatic dependency workflows.
+
 ## 0.4.0 - 2026-07-16
 
 ### Added

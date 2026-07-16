@@ -117,6 +117,142 @@ new()                                         *duke.new()*
     Open the unified Maven, Gradle, and Spring Boot generator picker.
     new_maven(), new_gradle(), and new_spring() start those wizards directly.
 
+create({kind}, {opts}, {callback})          *duke.create()*
+    Create a project without UI. kind must be "maven", "gradle", or
+    "spring". opts must contain:
+
+      cwd             Existing destination parent directory.
+      group_id        Maven group ID.
+      artifact_id     Artifact ID and target directory name.
+      java_version    Numeric target version string. "auto" is rejected.
+
+    package_name is optional for every kind and otherwise derives from the
+    coordinates.
+
+    Maven options:
+
+      archetype               Table containing group_id, artifact_id, and
+                              version. Defaults to the first configured
+                              maven.archetypes entry.
+      version                 Project version. Defaults to
+                              maven.project_version.
+      wrapper                 Boolean. Defaults to maven.wrapper.
+      command                 Defaults to maven.command.
+      timeout                 Positive milliseconds. Defaults to
+                              maven.timeout.
+      runner_java_version     "auto" or numeric version string. Defaults to
+                              maven.runner_java_version.
+
+    Gradle options:
+
+      project_type            Public Java project type. Defaults to
+                              gradle.default_project_type.
+      language                "java", "kotlin", or "groovy". Defaults to
+                              "java" and combines with project_type.
+      dsl                     Configured Gradle DSL. Defaults to gradle.dsl.
+      test_framework          Defaults to gradle.test_framework.
+      command                 Defaults to gradle.command.
+      timeout                 Positive milliseconds. Defaults to
+                              gradle.timeout.
+      runner_java_version     "auto" or numeric version string. Defaults to
+                              gradle.runner_java_version.
+
+    Maven and Gradle runner selection creates a process-scoped JAVA_HOME and
+    PATH. It never changes the target java_version or global environment.
+
+    Spring options:
+
+      boot_version     Required explicit Spring Boot version.
+      dependencies     List of Initializr dependency IDs. Defaults to {}.
+      project_type     "maven-project" or "gradle-project". Defaults to
+                       spring.project_type and determines the build.
+      language         "java", "kotlin", or "groovy". Defaults to
+                       spring.language.
+      packaging        "jar" or "war". Defaults to spring.packaging.
+      name             Defaults to artifact_id.
+      description      Defaults to an empty string.
+      url              HTTPS URL. Defaults to spring.starter_url.
+      timeout          Positive milliseconds. Defaults to spring.timeout.
+
+    Creation never prompts, confirms, notifies success, changes cwd, edits a
+    file, or invokes handoff. Success emits User DukeProjectCreated and calls
+    callback once with:
+>
+      {
+        ok = true,
+        kind = "maven",
+        project_dir = "/absolute/path/demo",
+        entry_file = "/absolute/path/demo/src/main/java/.../App.java",
+      }
+<
+    Failure calls callback once with ok = false, kind, and error, without an
+    invented project path. Validation, adapter startup, process, and event-hook
+    failures cannot produce a second callback. Event-hook and user-callback
+    exceptions are logged.
+
+add({opts}, {callback})                       *duke.add()*
+    Add one root Maven dependency without search or UI. opts requires
+    pom_path, group_id, artifact_id, and version. pom_path is explicit; no
+    upward search occurs. scope defaults to compile and may be compile, test,
+    provided, or runtime. Compile emits no scope element. Existing coordinates
+    succeed without a change.
+
+upgrade({opts}, {callback})               *duke.upgrade()*
+    Upgrade one unique root Maven dependency. opts requires pom_path,
+    group_id, artifact_id, and version, where version is the new explicit
+    version. Managed, missing-version, property-backed, malformed, and
+    ambiguous duplicate dependencies are rejected.
+
+remove({opts}, {callback})                 *duke.remove()*
+    Remove one unique root Maven dependency. opts requires pom_path, group_id,
+    and artifact_id. A missing coordinate succeeds without a change.
+
+    Successful add(), upgrade(), and remove() results have this shape:
+>
+      {
+        ok = true,
+        pom_path = "/absolute/path/pom.xml",
+        changed = true,
+        count = 1,
+        saved = true,
+      }
+<
+    Mutations read the latest POM immediately before editing. Unloaded files
+    and clean loaded buffers are written and return saved = true. A loaded,
+    already-modified buffer is updated in memory without forced write and
+    returns saved = false. Write failures return ok = false.
+
+outdated({opts}, {callback})             *duke.outdated()*
+    Inspect literal explicit root Maven dependency versions sequentially.
+    opts requires pom_path. Optional group_id and artifact_id filter one
+    coordinate; provide both or neither. This operation never writes.
+    Successful results add:
+>
+      {
+        dependencies = {
+          {
+            group_id = "junit",
+            artifact_id = "junit",
+            current_version = "3.8.1",
+            latest_version = "4.13.2",
+          },
+        },
+        skipped = { managed = 0, property_backed = 0 },
+        unchecked = 0,
+        warning = nil,
+      }
+<
+    dependencies contains only outdated rows. All-current succeeds with an
+    empty list. A timeout or HTTP 429 after at least one completed lookup
+    returns ok = true, partial rows, warning, and the exact unchecked count.
+    Failure before the first completed lookup returns ok = false. Ambiguous
+    duplicate coordinates are rejected before lookup.
+
+    All five programmatic functions require a callback. Unknown option keys
+    are ignored. Wrong types, missing required fields, unsupported enum
+    values, and unknown project kinds return structured callback errors. Every
+    result callback runs once on the Neovim main loop.
+
 add_dependency()                     *duke.add_dependency()*
     Find the nearest pom.xml and start the same dependency workflow as
     :DukeAdd.

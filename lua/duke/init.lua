@@ -252,30 +252,15 @@ local function nearest_pom()
 end
 
 local function read_pom(path)
-  local buffer = vim.fn.bufnr(path)
-  if buffer ~= -1 and vim.api.nvim_buf_is_loaded(buffer) then
-    return vim.api.nvim_buf_get_lines(buffer, 0, -1, false), buffer, vim.bo[buffer].modified
-  end
-  local ok, lines = pcall(vim.fn.readfile, path)
-  if not ok then
-    return nil
-  end
-  return lines
+  return require("duke.pom_file").read(path)
 end
 
 local function save_pom(path, lines, buffer, was_modified)
-  if buffer then
-    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
-    if was_modified then
-      return false
-    end
-    vim.api.nvim_buf_call(buffer, function()
-      vim.cmd("silent write")
-    end)
-    return true
+  local saved, err = require("duke.pom_file").save(path, lines, buffer, was_modified)
+  if saved == nil then
+    error(err)
   end
-  vim.fn.writefile(lines, path)
-  return true
+  return saved
 end
 
 local function installed_coordinates(lines)
@@ -835,6 +820,26 @@ function M.remove_dependency()
     local suffix = saved and "" or " (buffer left unsaved)"
     notify(string.format("removed %d dependencies%s", removed, suffix))
   end)
+end
+
+function M.create(kind, opts, callback)
+  require("duke.api").create(kind, opts, callback)
+end
+
+function M.add(opts, callback)
+  require("duke.api").add(opts, callback)
+end
+
+function M.upgrade(opts, callback)
+  require("duke.api").upgrade(opts, callback)
+end
+
+function M.outdated(opts, callback)
+  require("duke.api").outdated(opts, callback)
+end
+
+function M.remove(opts, callback)
+  require("duke.api").remove(opts, callback)
 end
 
 return M

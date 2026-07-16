@@ -247,6 +247,39 @@ handoff = {
 
 ## Lua API
 
+Programmatic calls never open a wizard or picker, change directory, edit a buffer, or invoke the configured handoff. Results arrive once through a callback on the Neovim main loop:
+
+```lua
+require("duke").create("maven", {
+  cwd = vim.fn.getcwd(),
+  group_id = "com.example",
+  artifact_id = "demo",
+  java_version = "21",
+}, function(result)
+  if not result.ok then
+    vim.notify(result.error, vim.log.levels.ERROR)
+    return
+  end
+  print(result.project_dir)
+end)
+```
+
+Maven dependency operations require an explicit POM path and exact coordinates:
+
+```lua
+require("duke").add({
+  pom_path = "/path/to/project/pom.xml",
+  group_id = "org.junit.jupiter",
+  artifact_id = "junit-jupiter",
+  version = "5.13.4",
+  scope = "test",
+}, function(result)
+  print(result.ok, result.changed, result.saved)
+end)
+```
+
+`create()` supports `maven`, `gradle`, and `spring`. `add()`, `upgrade()`, `outdated()`, and `remove()` provide the root Maven dependency lifecycle without UI. See `:help duke-api` for exhaustive options, result fields, validation behavior, and partial outdated results.
+
 `require("duke").new()` opens the unified generator picker. `new_maven()`, `new_gradle()`, and `new_spring()` start individual wizards directly. `add_dependency()`, `update_dependency()`, `outdated_dependencies()`, and `remove_dependency()` start the same nearest-`pom.xml` workflows as their commands. `clear_cache()` deletes all cached Initializr metadata and returns `true` on success.
 
 `require("duke").java_runtimes(opts)` returns discovered JDK homes for plugin or editor integration:
