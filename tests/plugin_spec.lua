@@ -1,15 +1,18 @@
 describe("plugin surface", function()
   local original_cwd
+  local original_notify
   local temporary_directories = {}
 
   before_each(function()
     original_cwd = vim.fn.getcwd()
+    original_notify = vim.notify
     vim.g.loaded_java_scaffold = nil
     package.loaded["java_scaffold"] = nil
     vim.cmd("runtime plugin/java-scaffold.lua")
   end)
 
   after_each(function()
+    vim.notify = original_notify
     package.loaded["java_scaffold.config"] = nil
     package.loaded["java_scaffold.gradle"] = nil
     package.loaded["java_scaffold.java"] = nil
@@ -32,6 +35,8 @@ describe("plugin surface", function()
     assert.equals(2, vim.fn.exists(":JavaScaffoldGradle"))
     assert.equals(2, vim.fn.exists(":JavaScaffoldSpring"))
     assert.equals(2, vim.fn.exists(":JavaScaffoldAddDependency"))
+    assert.equals(2, vim.fn.exists(":JavaScaffoldUpdateDependency"))
+    assert.equals(2, vim.fn.exists(":JavaScaffoldRemoveDependency"))
     assert.equals(2, vim.fn.exists(":JavaScaffoldClearCache"))
     assert.equals(2, vim.fn.exists(":JavaScaffoldLog"))
     assert.equals(2, vim.fn.exists(":JavaScaffoldHealth"))
@@ -44,6 +49,8 @@ describe("plugin surface", function()
     assert.is_function(plugin.new_gradle)
     assert.is_function(plugin.new_spring)
     assert.is_function(plugin.add_dependency)
+    assert.is_function(plugin.update_dependency)
+    assert.is_function(plugin.remove_dependency)
     assert.is_function(plugin.clear_cache)
     assert.is_function(plugin.java_runtimes)
     assert.is_function(plugin.select_runtime)
@@ -403,6 +410,317 @@ describe("plugin surface", function()
 
     assert.same({ "Maven Central version", "Maven dependency scope" }, prompts)
     assert.same(original, vim.fn.readfile(pom_path))
+  end)
+
+  it("updates an explicit Maven dependency and hides managed dependencies", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    local original = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>org.junit.jupiter</groupId>",
+      "      <artifactId>junit-jupiter</artifactId>",
+      "      <version>5.12.0</version>",
+      "      <scope>test</scope>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>org.springframework.boot</groupId>",
+      "      <artifactId>spring-boot-starter-web</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    vim.fn.writefile(original, pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["java_scaffold.maven_central"] = {
+      versions = function(group_id, artifact_id, callback)
+        assert.equals("org.junit.jupiter", group_id)
+        assert.equals("junit-jupiter", artifact_id)
+        callback(nil, { "5.13.4", "5.12.0" })
+      end,
+    }
+    package.loaded["java_scaffold.picker"] = {
+      select_one = function(items, opts, callback)
+        if opts.prompt == "Update Maven dependency" then
+          assert.equals(1, #items)
+          assert.equals("org.junit.jupiter:junit-jupiter  5.12.0", opts.format_item(items[1]))
+          callback(items[1])
+          return
+        end
+        assert.equals("Maven Central version", opts.prompt)
+        assert.same({ "5.13.4", "5.12.0" }, items)
+        assert.equals("5.13.4", opts.default)
+        assert.equals("5.12.0  (current)", opts.format_item("5.12.0"))
+        callback("5.13.4")
+      end,
+    }
+
+    require("java_scaffold").update_dependency()
+
+    local expected = vim.deepcopy(original)
+    expected[6] = "      <version>5.13.4</version>"
+    assert.same(expected, vim.fn.readfile(pom_path))
+    assert.is_truthy(table.concat(notices, "\n"):find("1 managed dependency hidden", 1, true))
+  end)
+
+  it("leaves Maven dependencies untouched when update selection is cancelled or current", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    local original = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>demo</artifactId>",
+      "      <version>1.0</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    vim.fn.writefile(original, pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local central_calls = 0
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["java_scaffold.maven_central"] = {
+      versions = function(_, _, callback)
+        central_calls = central_calls + 1
+        callback(nil, { "2.0", "1.0" })
+      end,
+    }
+    package.loaded["java_scaffold.picker"] = {
+      select_one = function(_, opts, callback)
+        assert.equals("Update Maven dependency", opts.prompt)
+        callback(nil)
+      end,
+    }
+
+    require("java_scaffold").update_dependency()
+    assert.equals(0, central_calls)
+
+    package.loaded["java_scaffold.picker"] = {
+      select_one = function(items, opts, callback)
+        if opts.prompt == "Update Maven dependency" then
+          callback(items[1])
+        else
+          callback(nil)
+        end
+      end,
+    }
+    require("java_scaffold").update_dependency()
+    assert.equals(1, central_calls)
+
+    package.loaded["java_scaffold.picker"] = {
+      select_one = function(items, opts, callback)
+        if opts.prompt == "Update Maven dependency" then
+          callback(items[1])
+        else
+          callback("1.0")
+        end
+      end,
+    }
+    require("java_scaffold").update_dependency()
+
+    assert.equals(2, central_calls)
+    assert.same(original, vim.fn.readfile(pom_path))
+    assert.is_truthy(table.concat(notices, "\n"):find("already uses version 1.0", 1, true))
+  end)
+
+  it("rejects property and stale Maven dependency updates", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    local function pom_lines(version)
+      return {
+        "<project>",
+        "  <dependencies>",
+        "    <dependency>",
+        "      <groupId>com.example</groupId>",
+        "      <artifactId>demo</artifactId>",
+        "      <version>" .. version .. "</version>",
+        "    </dependency>",
+        "  </dependencies>",
+        "</project>",
+      }
+    end
+    vim.fn.writefile(pom_lines("${demo.version}"), pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["java_scaffold.maven_central"] = {
+      versions = function(_, _, callback)
+        callback(nil, { "2.0", "1.0" })
+      end,
+    }
+    package.loaded["java_scaffold.picker"] = {
+      select_one = function(items, _, callback)
+        callback(items[1])
+      end,
+    }
+
+    require("java_scaffold").update_dependency()
+    assert.is_truthy(table.concat(notices, "\n"):find("demo.version", 1, true))
+    assert.same(pom_lines("${demo.version}"), vim.fn.readfile(pom_path))
+
+    notices = {}
+    vim.fn.writefile(pom_lines("1.0"), pom_path)
+    package.loaded["java_scaffold.picker"] = {
+      select_one = function(items, opts, callback)
+        if opts.prompt == "Update Maven dependency" then
+          callback(items[1])
+        else
+          vim.fn.writefile(pom_lines("1.1"), pom_path)
+          callback("2.0")
+        end
+      end,
+    }
+    require("java_scaffold").update_dependency()
+
+    assert.same(pom_lines("1.1"), vim.fn.readfile(pom_path))
+    assert.is_truthy(table.concat(notices, "\n"):find("changed", 1, true))
+  end)
+
+  it("removes multiple Maven dependencies only after confirmation", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    local original = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>first</artifactId>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>middle</artifactId>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>last</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    vim.fn.writefile(original, pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local confirmation
+    package.loaded["java_scaffold.picker"] = {
+      select_many = function(items, opts, callback)
+        assert.equals("Remove Maven dependencies", opts.prompt)
+        assert.equals("com.example:first", opts.format_item(items[1]))
+        assert.equals(3, #items)
+        callback({ items[1], items[3] })
+      end,
+      confirm = function(message, action)
+        confirmation = message
+        assert.equals("Remove", action)
+        return true
+      end,
+    }
+
+    require("java_scaffold").remove_dependency()
+
+    assert.is_truthy(confirmation:find("com.example:first", 1, true))
+    assert.is_truthy(confirmation:find("com.example:last", 1, true))
+    assert.same({
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>middle</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }, vim.fn.readfile(pom_path))
+  end)
+
+  it("cancels or atomically aborts stale Maven dependency removal", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    local original = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>demo</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    vim.fn.writefile(original, pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local confirm_calls = 0
+    package.loaded["java_scaffold.picker"] = {
+      select_many = function(_, _, callback)
+        callback(nil)
+      end,
+      confirm = function()
+        confirm_calls = confirm_calls + 1
+        return true
+      end,
+    }
+    require("java_scaffold").remove_dependency()
+    assert.equals(0, confirm_calls)
+
+    package.loaded["java_scaffold.picker"] = {
+      select_many = function(items, _, callback)
+        callback(items)
+      end,
+      confirm = function()
+        confirm_calls = confirm_calls + 1
+        return false
+      end,
+    }
+    require("java_scaffold").remove_dependency()
+    assert.equals(1, confirm_calls)
+    assert.same(original, vim.fn.readfile(pom_path))
+
+    local stale = { "<project>", "  <dependencies>", "  </dependencies>", "</project>" }
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["java_scaffold.picker"] = {
+      select_many = function(items, _, callback)
+        callback(items)
+      end,
+      confirm = function()
+        vim.fn.writefile(stale, pom_path)
+        return true
+      end,
+    }
+    require("java_scaffold").remove_dependency()
+
+    assert.same(stale, vim.fn.readfile(pom_path))
+    assert.is_truthy(table.concat(notices, "\n"):find("changed", 1, true))
   end)
 
   it("keeps Spring catalog insertion for Boot poms", function()

@@ -23,6 +23,14 @@ vim.api.nvim_create_user_command("JavaScaffoldAddDependency", function()
   require("java_scaffold").add_dependency()
 end, { desc = "Add dependencies to pom.xml (Spring catalog or Maven Central)", force = true })
 
+vim.api.nvim_create_user_command("JavaScaffoldUpdateDependency", function()
+  require("java_scaffold").update_dependency()
+end, { desc = "Update a root pom.xml dependency from Maven Central", force = true })
+
+vim.api.nvim_create_user_command("JavaScaffoldRemoveDependency", function()
+  require("java_scaffold").remove_dependency()
+end, { desc = "Remove confirmed root pom.xml dependencies", force = true })
+
 vim.api.nvim_create_user_command("JavaScaffoldClearCache", function()
   require("java_scaffold").clear_cache()
 end, { desc = "Clear cached Spring Initializr metadata", force = true })

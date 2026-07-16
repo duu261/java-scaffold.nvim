@@ -1,6 +1,6 @@
 # ☕ java-scaffold.nvim
 
-Safely scaffold Maven, Gradle, and Spring Boot projects in Neovim, add Maven dependencies from Spring catalogs or Maven Central, then open generated Java source or hand the project to another tool.
+Safely scaffold Maven, Gradle, and Spring Boot projects in Neovim, manage Maven dependencies, then open generated Java source or hand the project to another tool.
 
 ## ✨ Features
 
@@ -8,13 +8,13 @@ Safely scaffold Maven, Gradle, and Spring Boot projects in Neovim, add Maven dep
 - Maven quickstart and web application archetypes with optional Maven Wrapper generation.
 - Wrapper-backed Java, Kotlin, or Groovy Gradle applications, libraries, and plugins using Kotlin or Groovy build scripts.
 - Spring Boot Maven and Gradle projects using Initializr-provided metadata and dependency choices.
-- Safe Maven dependency insertion from Spring catalogs or Maven Central, including single-artifact version and scope selection.
+- Safe Maven dependency add, update, and removal workflows for root project dependencies.
 - Separate project Java target and Maven or Gradle runner JVM selection.
 - Private staging, target collision protection, structural POM edits, and offline metadata fallback.
 - Telescope or native `vim.ui` pickers, including multi-select dependency workflows.
 - Generated Java entry opening, `User JavaScaffoldProjectCreated`, and optional post-create handoff.
 
-Focused scope: project creation and Maven dependency insertion. The plugin does not run, format, or test projects, edit Gradle dependencies, or manage JDTLS.
+Focused scope: project creation and Maven dependency lifecycle management. The plugin does not run, format, or test projects, edit Gradle dependencies, or manage JDTLS.
 
 ## 📦 Requirements
 
@@ -31,7 +31,7 @@ Workflow tools:
 | `java` | Java discovery and project workflows |
 | `mvn` | Maven archetype generation and optional Maven Wrapper generation |
 | `gradle` | Gradle project generation |
-| `curl` | Spring requests and Maven Central dependency search |
+| `curl` | Spring requests and Maven Central dependency search or version lookup |
 | `tar` | Spring archive inspection and extraction |
 
 Optional integrations:
@@ -43,7 +43,7 @@ Optional integrations:
 
 Missing workflow-specific tools do not affect unrelated generators. Without Telescope, the plugin uses `vim.ui`. Existing Java filetype or JDTLS setup can activate when generated Java source opens, but neither is required or managed by this plugin.
 
-Maven Central search needs network access for every query. The service may throttle requests with HTTP 429; arbitrary searches have no offline fallback.
+Maven Central search and version lookup need network access for every query. The service may throttle requests with HTTP 429; arbitrary searches have no offline fallback.
 
 ## 🚀 Installation
 
@@ -60,6 +60,8 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
     "JavaScaffoldGradle",
     "JavaScaffoldSpring",
     "JavaScaffoldAddDependency",
+    "JavaScaffoldUpdateDependency",
+    "JavaScaffoldRemoveDependency",
     "JavaScaffoldClearCache",
     "JavaScaffoldLog",
     "JavaScaffoldHealth",
@@ -95,11 +97,13 @@ Enter `~/Projects` as destination and `demo` as artifact ID to create `~/Project
 | `:JavaScaffoldGradle` | Create Java, Kotlin, or Groovy Gradle application, library, or plugin |
 | `:JavaScaffoldSpring` | Create Spring Boot Maven or Gradle project |
 | `:JavaScaffoldAddDependency` | Add dependencies to nearest `pom.xml` from Spring catalog or Maven Central |
+| `:JavaScaffoldUpdateDependency` | Update one explicit root dependency version from Maven Central |
+| `:JavaScaffoldRemoveDependency` | Remove selected root dependencies after confirmation |
 | `:JavaScaffoldClearCache` | Delete all cached Initializr metadata and dependency catalogs |
 | `:JavaScaffoldLog` | Show internal operation log |
 | `:JavaScaffoldHealth` | Load lazy plugin and run its health check |
 
-With Telescope, use `<Tab>` to toggle dependencies and `<Enter>` to finish. Without Telescope, select dependencies one at a time through `vim.ui.select`, then choose `[Done]`.
+With Telescope, use `<Tab>` to toggle add or removal choices and `<Enter>` to finish. Without Telescope, select dependencies one at a time through `vim.ui.select`, then choose `[Done]`. Updates select one dependency per run.
 
 Every generator asks for a destination parent directory, defaulting to Neovim's current working directory. A final review shows destination, coordinates, build system, Java target, runner JVM when applicable, and workflow-specific settings. Choosing `Cancel` starts no generator process.
 
@@ -195,11 +199,11 @@ Discovery resolves duplicate JDK paths, caps each version probe at one second, a
 - A target appearing during generation is treated as user-owned; promotion aborts and preserves it.
 - Process commands use argument lists, never shell command strings.
 - Spring archives are inspected before extraction; absolute paths, parent traversal, symlinks, and hardlinks are rejected.
-- POM insertion re-reads file after network requests and picker interaction.
+- Every POM edit re-reads the file after network requests and picker interaction. Changed selections abort the operation.
 - Only the root project dependency block is edited. Dependency management, plugins, and profiles remain untouched.
-- Compact one-line or self-closing dependency XML is rejected instead of guessed.
+- Compact one-line or self-closing project, dependencies, or dependency XML is rejected instead of guessed.
 
-## Spring metadata and dependency insertion
+## Spring metadata and Maven dependency lifecycle
 
 Spring name, description, package, Boot version, full-project build type, language, packaging, Java, and dependency choices are collected before creation. Initializr metadata supplies available Boot versions and Maven or Gradle project types. Unsupported active Java versions fall back to Initializr's default.
 
@@ -212,6 +216,10 @@ Run `:JavaScaffoldClearCache` when cached Initializr data becomes stale. Next me
 Dependency insertion exposes only entries representable by one normal Maven `<dependency>` block. Entries requiring BOM import, custom repository, or annotation-processor wiring stay hidden. Those entries remain available during new Spring project creation, where Initializr can generate complete Maven configuration.
 
 For a plain Maven pom, `:JavaScaffoldAddDependency` prompts for a Maven Central query and shows `groupId:artifactId` plus latest version. Selecting one artifact opens a newest-first version picker defaulted to that latest version, then a scope picker with `compile` as the default and `test`, `provided`, or `runtime` as alternatives. Compile scope emits no `<scope>` element. Multi-select keeps each artifact's latest version and compile scope without another prompt. Malformed result rows are skipped without discarding valid neighbors, and `pom` artifacts remain excluded. Ranking comes from Maven Central. Rerun the command to refine a query. Search has no cache or offline fallback.
+
+`:JavaScaffoldUpdateDependency` lists root dependencies with explicit `<version>` elements and updates one per run from Maven Central's newest-first version list. The current version is marked; selecting it is a no-op. Managed dependencies without a version are hidden with a count notice. Property-backed versions such as `${library.version}` are listed but rejected with the property name because property editing is outside plugin scope. Only version text changes; scope, type, classifier, exclusions, comments, and formatting stay untouched.
+
+`:JavaScaffoldRemoveDependency` lists all root dependencies, including managed ones, and supports multi-select. A mandatory confirmation names every selected coordinate. Declining or canceling changes nothing. Removal deletes complete dependency blocks but keeps the root `<dependencies>` container, sibling blocks, comments, and surrounding blank-line formatting.
 
 No Boot versions are hardcoded into the picker. Old-version lookup happens only when the dependency command reads an existing `pom.xml`.
 
@@ -235,7 +243,7 @@ handoff = {
 
 ## Lua API
 
-`require("java_scaffold").new()` opens the unified generator picker. `new_maven()`, `new_gradle()`, and `new_spring()` start individual wizards directly. `add_dependency()` starts the same nearest-`pom.xml` workflow as `:JavaScaffoldAddDependency`. `clear_cache()` deletes all cached Initializr metadata and returns `true` on success.
+`require("java_scaffold").new()` opens the unified generator picker. `new_maven()`, `new_gradle()`, and `new_spring()` start individual wizards directly. `add_dependency()`, `update_dependency()`, and `remove_dependency()` start the same nearest-`pom.xml` workflows as their commands. `clear_cache()` deletes all cached Initializr metadata and returns `true` on success.
 
 `require("java_scaffold").java_runtimes(opts)` returns discovered JDK homes for plugin or editor integration:
 
@@ -262,7 +270,7 @@ Active Java wins when eligible and `prefer_active` is not `false`; otherwise the
 
 ## Scope and limits
 
-V1 owns Maven, Gradle, and Spring project creation plus dependency insertion into Maven poms from Spring catalogs or Maven Central.
+V1 owns Maven, Gradle, and Spring project creation plus root-level Maven dependency add, update, and removal workflows.
 
 The plugin deliberately does not run applications, format code, execute tests, edit Gradle dependencies, or manage JDTLS. Existing tools remain responsible for those jobs.
 

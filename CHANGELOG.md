@@ -7,6 +7,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 ### Added
 
 - Scope selection for single-artifact Maven Central dependency insertion, with compile as the default and test, provided, or runtime as alternatives.
+- Single-dependency Maven Central version updates that preserve all other dependency block content and hide managed versions.
+- Confirmed multi-select removal of root Maven dependency blocks with stale-file protection.
 
 ## 0.3.1 - 2026-07-16
 

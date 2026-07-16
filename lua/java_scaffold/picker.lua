@@ -126,7 +126,7 @@ function M.select_many(items, opts, callback)
     return
   end
 
-  local done = { __done = true, name = "[Done - no dependencies]" }
+  local done = { __done = true, name = opts.done_label or "[Done]" }
   local choices = { done }
   vim.list_extend(choices, items)
   local picker_opts = telescope.themes.get_dropdown({})
@@ -173,8 +173,8 @@ function M.input(prompt, default, callback)
   vim.ui.input({ prompt = prompt, default = default }, callback)
 end
 
-function M.confirm(message)
-  return vim.fn.confirm(message, "&Create\nC&ancel", 2, "Question") == 1
+function M.confirm(message, action)
+  return vim.fn.confirm(message, "&" .. (action or "Create") .. "\nC&ancel", 2, "Question") == 1
 end
 
 return M

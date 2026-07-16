@@ -466,4 +466,197 @@ function M.add_dependency()
   end)
 end
 
+local function dependency_label(dependency)
+  return dependency.group_id .. ":" .. dependency.artifact_id
+end
+
+local function same_dependency(left, right)
+  return left
+    and right
+    and left.group_id == right.group_id
+    and left.artifact_id == right.artifact_id
+end
+
+function M.update_dependency()
+  local pom_path = nearest_pom()
+  if not pom_path then
+    notify_error("no pom.xml found in current directory or parents")
+    return
+  end
+  local lines = read_pom(pom_path)
+  if not lines then
+    notify_error("cannot read " .. pom_path)
+    return
+  end
+  local dependencies, list_error = require("java_scaffold.pom").list(lines)
+  if list_error then
+    notify_error(list_error)
+    return
+  end
+
+  local choices = {}
+  local hidden = 0
+  for _, dependency in ipairs(dependencies) do
+    if dependency.version then
+      choices[#choices + 1] = dependency
+    else
+      hidden = hidden + 1
+    end
+  end
+  if hidden > 0 then
+    local noun = hidden == 1 and "dependency" or "dependencies"
+    notify(
+      string.format("%d managed %s hidden because no explicit version is present", hidden, noun)
+    )
+  end
+  if #choices == 0 then
+    notify("no root dependencies with explicit versions found")
+    return
+  end
+
+  require("java_scaffold.picker").select_one(choices, {
+    prompt = "Update Maven dependency",
+    format_item = function(dependency)
+      return string.format("%s  %s", dependency_label(dependency), dependency.version)
+    end,
+  }, function(selected)
+    if not selected then
+      return
+    end
+    local property = selected.version:match("^%${([%w_.-]+)}$")
+    if property then
+      notify_error("cannot update dependency version property " .. property)
+      return
+    end
+
+    require("java_scaffold.maven_central").versions(
+      selected.group_id,
+      selected.artifact_id,
+      function(version_error, versions)
+        if version_error then
+          notify_error(version_error)
+          return
+        end
+        if #versions == 0 then
+          notify("no Maven Central versions found for " .. dependency_label(selected))
+          return
+        end
+        if not vim.tbl_contains(versions, selected.version) then
+          versions[#versions + 1] = selected.version
+        end
+        require("java_scaffold.picker").select_one(versions, {
+          prompt = "Maven Central version",
+          default = versions[1],
+          format_item = function(version)
+            return version == selected.version and (version .. "  (current)") or version
+          end,
+        }, function(version)
+          if not version then
+            return
+          end
+          if version == selected.version then
+            notify(dependency_label(selected) .. " already uses version " .. version)
+            return
+          end
+
+          local latest_lines, buffer, was_modified = read_pom(pom_path)
+          if not latest_lines then
+            notify_error("cannot reread " .. pom_path)
+            return
+          end
+          local latest_dependencies, latest_error = require("java_scaffold.pom").list(latest_lines)
+          if latest_error then
+            notify_error(latest_error)
+            return
+          end
+          local latest = latest_dependencies[selected.index]
+          if not same_dependency(latest, selected) or latest.version ~= selected.version then
+            notify_error("pom.xml dependency changed; run command again")
+            return
+          end
+          local updated, update_error =
+            require("java_scaffold.pom").update_version(latest_lines, latest, version)
+          if update_error then
+            notify_error(update_error)
+            return
+          end
+          local saved = save_pom(pom_path, updated, buffer, was_modified)
+          local suffix = saved and "" or " (buffer left unsaved)"
+          notify(
+            string.format("updated %s to version %s%s", dependency_label(latest), version, suffix)
+          )
+        end)
+      end
+    )
+  end)
+end
+
+function M.remove_dependency()
+  local pom_path = nearest_pom()
+  if not pom_path then
+    notify_error("no pom.xml found in current directory or parents")
+    return
+  end
+  local lines = read_pom(pom_path)
+  if not lines then
+    notify_error("cannot read " .. pom_path)
+    return
+  end
+  local dependencies, list_error = require("java_scaffold.pom").list(lines)
+  if list_error then
+    notify_error(list_error)
+    return
+  end
+  if #dependencies == 0 then
+    notify("no root dependencies found")
+    return
+  end
+
+  require("java_scaffold.picker").select_many(dependencies, {
+    prompt = "Remove Maven dependencies",
+    format_item = dependency_label,
+  }, function(selected)
+    if not selected or #selected == 0 then
+      return
+    end
+    local labels = vim.tbl_map(function(dependency)
+      return "- " .. dependency_label(dependency)
+    end, selected)
+    local confirmation = "Remove dependencies?\n\n" .. table.concat(labels, "\n")
+    if not require("java_scaffold.picker").confirm(confirmation, "Remove") then
+      return
+    end
+
+    local latest_lines, buffer, was_modified = read_pom(pom_path)
+    if not latest_lines then
+      notify_error("cannot reread " .. pom_path)
+      return
+    end
+    local latest_dependencies, latest_error = require("java_scaffold.pom").list(latest_lines)
+    if latest_error then
+      notify_error(latest_error)
+      return
+    end
+    local latest_selected = {}
+    for _, dependency in ipairs(selected) do
+      local latest = latest_dependencies[dependency.index]
+      if not same_dependency(latest, dependency) then
+        notify_error("pom.xml dependencies changed; run command again")
+        return
+      end
+      latest_selected[#latest_selected + 1] = latest
+    end
+
+    local updated, removed, remove_error =
+      require("java_scaffold.pom").remove(latest_lines, latest_selected)
+    if remove_error then
+      notify_error(remove_error)
+      return
+    end
+    local saved = save_pom(pom_path, updated, buffer, was_modified)
+    local suffix = saved and "" or " (buffer left unsaved)"
+    notify(string.format("removed %d dependencies%s", removed, suffix))
+  end)
+end
+
 return M

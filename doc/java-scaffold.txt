@@ -15,13 +15,13 @@ CONTENTS                                         *java-scaffold-contents*
 1. INTRODUCTION                              *java-scaffold-introduction*
 
 java-scaffold.nvim safely creates Maven, Gradle, and Spring Boot projects in
-Neovim. It adds Maven dependencies from Spring catalogs or Maven Central,
+Neovim. It adds, updates, and removes root Maven dependencies,
 opens generated Java source for an existing Java filetype or JDTLS setup, and
 can pass a completed project to an optional handoff command.
 
 Guided wizards collect destination, coordinates, package, Java, and
-workflow-specific choices before a final review. Maven Central single
-selection includes version and scope pickers. Telescope provides searchable
+workflow-specific choices before a final review. Maven dependency workflows
+provide single and multi-select pickers. Telescope provides searchable
 pickers; native vim.ui remains the dependency-free fallback.
 
 Neovim 0.11+ is the only core requirement. java, Maven, Gradle, curl, and tar
@@ -121,6 +121,14 @@ add_dependency()                     *java-scaffold.add_dependency()*
     Find the nearest pom.xml and start the same dependency workflow as
     :JavaScaffoldAddDependency.
 
+update_dependency()               *java-scaffold.update_dependency()*
+    Find the nearest pom.xml and update one explicit root dependency version
+    through the same workflow as :JavaScaffoldUpdateDependency.
+
+remove_dependency()               *java-scaffold.remove_dependency()*
+    Find the nearest pom.xml and remove confirmed root dependency blocks
+    through the same workflow as :JavaScaffoldRemoveDependency.
+
 clear_cache()                           *java-scaffold.clear_cache()*
     Delete all cached Initializr project metadata and dependency catalogs.
     Return true on success and false when deletion fails.
@@ -207,6 +215,24 @@ then choose [Done].
     same-URL cache, compatible custom server, or Boot upgrade. Maven Central
     search needs live network access and has no offline fallback.
 
+                                           *:JavaScaffoldUpdateDependency*
+:JavaScaffoldUpdateDependency
+    Find the nearest pom.xml and list root dependencies with explicit version
+    elements. Managed dependencies without versions are hidden with a count
+    notice. Select one dependency, then choose from Maven Central versions in
+    newest-first order. The current version is marked and selecting it is a
+    no-op. Property-backed versions are rejected with the property name. Only
+    version text changes; scope and all other block content stay untouched.
+
+                                           *:JavaScaffoldRemoveDependency*
+:JavaScaffoldRemoveDependency
+    Find the nearest pom.xml and multi-select root dependencies, including
+    managed dependencies without versions. A mandatory confirmation lists
+    every selected groupId:artifactId. Canceling or declining changes nothing.
+    Confirming removes whole dependency blocks while preserving the root
+    dependencies container, sibling blocks, comments, and surrounding blank
+    lines.
+
                                                *:JavaScaffoldClearCache*
 :JavaScaffoldClearCache
     Delete all cached Initializr project metadata and dependency catalogs.
@@ -263,16 +289,17 @@ that still supplies the catalog.
 The plugin does not add unsupported Boot versions to new-project choices or
 bypass Initializr compatibility rules. Old-version lookup happens only when
 :JavaScaffoldAddDependency reads that version from an existing pom.xml.
-Plain Maven poms instead use live Maven Central search. The service may return
-HTTP 429; rerun later because arbitrary searches are not cached.
+Plain Maven poms instead use live Maven Central search. Dependency updates use
+live Maven Central version lookup. The service may return HTTP 429; rerun later
+because arbitrary searches and version lists are not cached.
 
 ==============================================================================
 7. SCOPE AND TROUBLESHOOTING              *java-scaffold-troubleshooting*
 
-V1 owns Maven, Gradle, and Spring project creation plus dependency insertion
-into Maven poms from Spring catalogs or Maven Central. It deliberately does
-not run applications, format code, execute tests, edit Gradle dependencies,
-or manage JDTLS.
+V1 owns Maven, Gradle, and Spring project creation plus root-level Maven
+dependency add, update, and removal workflows. It deliberately does not run
+applications, format code, execute tests, edit Gradle dependencies, or manage
+JDTLS.
 
 For failures:
 

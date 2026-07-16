@@ -236,4 +236,213 @@ describe("POM editing", function()
       "</project>",
     }, updated)
   end)
+
+  it("lists only root dependencies with versions and positions", function()
+    local lines = {
+      "<project>",
+      "  <dependencyManagement>",
+      "    <dependencies>",
+      "      <dependency>",
+      "        <groupId>managed</groupId>",
+      "        <artifactId>catalog</artifactId>",
+      "        <version>1.0</version>",
+      "      </dependency>",
+      "    </dependencies>",
+      "  </dependencyManagement>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>org.junit.jupiter</groupId>",
+      "      <artifactId>junit-jupiter</artifactId>",
+      "      <version>5.13.4</version>",
+      "      <scope>test</scope>",
+      "    </dependency>",
+      "    <!-- keep this comment between blocks -->",
+      "    <dependency>",
+      "      <groupId>org.springframework.boot</groupId>",
+      "      <artifactId>spring-boot-starter-web</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "  <profiles>",
+      "    <profile>",
+      "      <dependencies>",
+      "        <dependency>",
+      "          <groupId>profile</groupId>",
+      "          <artifactId>only</artifactId>",
+      "        </dependency>",
+      "      </dependencies>",
+      "    </profile>",
+      "  </profiles>",
+      "</project>",
+    }
+
+    local dependencies, err = pom.list(lines)
+
+    assert.is_nil(err)
+    assert.equals(2, #dependencies)
+    assert.same({
+      group_id = "org.junit.jupiter",
+      artifact_id = "junit-jupiter",
+      version = "5.13.4",
+    }, {
+      group_id = dependencies[1].group_id,
+      artifact_id = dependencies[1].artifact_id,
+      version = dependencies[1].version,
+    })
+    assert.same({
+      group_id = "org.springframework.boot",
+      artifact_id = "spring-boot-starter-web",
+      version = nil,
+    }, {
+      group_id = dependencies[2].group_id,
+      artifact_id = dependencies[2].artifact_id,
+      version = dependencies[2].version,
+    })
+    assert.is_number(dependencies[1].start_line)
+    assert.is_number(dependencies[1].end_line)
+  end)
+
+  it("rejects compact and self-closing root dependency blocks", function()
+    local compact = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency><groupId>com.example</groupId><artifactId>demo</artifactId></dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local self_closing = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency/>",
+      "  </dependencies>",
+      "</project>",
+    }
+
+    local compact_dependencies, compact_error = pom.list(compact)
+    local self_closing_dependencies, self_closing_error = pom.list(self_closing)
+
+    assert.is_nil(compact_dependencies)
+    assert.matches("compact", compact_error)
+    assert.is_nil(self_closing_dependencies)
+    assert.matches("self%-closing", self_closing_error)
+  end)
+
+  it("updates only explicit version text and preserves the dependency block", function()
+    local lines = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <!-- version chosen by hand -->",
+      "      <groupId>org.junit.jupiter</groupId>",
+      "      <artifactId>junit-jupiter</artifactId>",
+      "      <version>5.12.0</version>",
+      "      <type>test-jar</type>",
+      "      <classifier>tests</classifier>",
+      "      <scope>test</scope>",
+      "      <exclusions>",
+      "        <exclusion>",
+      "          <groupId>legacy</groupId>",
+      "          <artifactId>engine</artifactId>",
+      "        </exclusion>",
+      "      </exclusions>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local dependencies = assert(pom.list(lines))
+
+    local updated, err = pom.update_version(lines, dependencies[1], "5.13.4")
+
+    assert.is_nil(err)
+    local before = table.concat(lines, "\n")
+    local after = table.concat(updated, "\n")
+    assert.equals(before:gsub("<version>5.12.0</version>", "<version>5.13.4</version>"), after)
+    assert.is_truthy(after:find("<scope>test</scope>", 1, true))
+    assert.is_truthy(after:find("<classifier>tests</classifier>", 1, true))
+  end)
+
+  it("rejects property-backed version updates with the property name", function()
+    local lines = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>demo</artifactId>",
+      "      <version>${demo.version}</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local dependencies = assert(pom.list(lines))
+
+    local updated, err = pom.update_version(lines, dependencies[1], "2.0")
+
+    assert.matches("demo%.version", err)
+    assert.same(lines, updated)
+  end)
+
+  it("removes selected blocks without touching siblings or surrounding formatting", function()
+    local lines = {
+      "<project>",
+      "  <dependencies>",
+      "",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>first</artifactId>",
+      "    </dependency>",
+      "",
+      "    <!-- middle dependency stays -->",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>middle</artifactId>",
+      "    </dependency>",
+      "",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>last</artifactId>",
+      "    </dependency>",
+      "",
+      "  </dependencies>",
+      "</project>",
+    }
+    local dependencies = assert(pom.list(lines))
+
+    local updated, removed, err = pom.remove(lines, { dependencies[1], dependencies[3] })
+
+    assert.is_nil(err)
+    assert.equals(2, removed)
+    assert.same({
+      "<project>",
+      "  <dependencies>",
+      "",
+      "",
+      "    <!-- middle dependency stays -->",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>middle</artifactId>",
+      "    </dependency>",
+      "",
+      "",
+      "  </dependencies>",
+      "</project>",
+    }, updated)
+  end)
+
+  it("keeps the root dependencies container after removing the last dependency", function()
+    local lines = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>only</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local dependencies = assert(pom.list(lines))
+
+    local updated, removed = pom.remove(lines, dependencies)
+
+    assert.equals(1, removed)
+    assert.same({ "<project>", "  <dependencies>", "  </dependencies>", "</project>" }, updated)
+  end)
 end)
