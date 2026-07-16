@@ -32,6 +32,39 @@ describe("Initializr metadata", function()
     }, entries)
   end)
 
+  it("returns only full Spring project types", function()
+    assert.same(
+      {
+        { id = "maven-project", name = "Maven - Groovy", build = "maven" },
+        { id = "gradle-project-kotlin", name = "Gradle - Kotlin", build = "gradle" },
+      },
+      metadata.project_types({
+        type = {
+          values = {
+            {
+              id = "maven-project",
+              name = "Maven - Groovy",
+              tags = { build = "maven", format = "project" },
+            },
+            {
+              id = "maven-build",
+              name = "Maven POM",
+              tags = { build = "maven", format = "build" },
+            },
+            {
+              id = "gradle-project-kotlin",
+              name = "Gradle - Kotlin",
+              tags = { build = "gradle", format = "project" },
+            },
+            { id = "broken", name = "Broken", tags = { format = "project" } },
+            "malformed",
+          },
+        },
+      })
+    )
+    assert.same({}, metadata.project_types({}))
+  end)
+
   it("uses remote JSON and refreshes cache", function()
     local cache = vim.fn.tempname()
     local result

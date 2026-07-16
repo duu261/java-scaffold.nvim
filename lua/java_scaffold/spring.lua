@@ -26,6 +26,9 @@ function M.build_curl_args(opts)
   add_param(args, "groupId", opts.group_id)
   add_param(args, "artifactId", opts.artifact_id)
   add_param(args, "name", opts.name or opts.artifact_id)
+  if opts.description and opts.description ~= "" then
+    add_param(args, "description", opts.description)
+  end
   add_param(
     args,
     "packageName",
@@ -86,6 +89,10 @@ function M.create(opts, callback)
   local validation_error = require("java_scaffold.maven").validate(opts.group_id, opts.artifact_id)
   if validation_error then
     callback(validation_error)
+    return
+  end
+  if opts.build ~= "maven" and opts.build ~= "gradle" then
+    callback("Spring build must be maven or gradle")
     return
   end
 
@@ -168,9 +175,19 @@ function M.create(opts, callback)
                     return
                   end
                   local staged_project = vim.fs.joinpath(staging, opts.artifact_id)
-                  if not vim.uv.fs_stat(vim.fs.joinpath(staged_project, "pom.xml")) then
+                  local expected
+                  local has_build
+                  if opts.build == "maven" then
+                    expected = "pom.xml"
+                    has_build = vim.uv.fs_stat(vim.fs.joinpath(staged_project, "pom.xml"))
+                  else
+                    expected = "build.gradle or build.gradle.kts"
+                    has_build = vim.uv.fs_stat(vim.fs.joinpath(staged_project, "build.gradle"))
+                      or vim.uv.fs_stat(vim.fs.joinpath(staged_project, "build.gradle.kts"))
+                  end
+                  if not has_build then
                     fs.cleanup(staging)
-                    callback("Spring Initializr response contained no pom.xml")
+                    callback("Spring Initializr response contained no " .. expected)
                     return
                   end
                   local promoted, promote_error = fs.promote(staged_project, target)

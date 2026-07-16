@@ -262,6 +262,28 @@ function M.values(client, key)
   return result
 end
 
+function M.project_types(client)
+  local result = {}
+  local section = type(client) == "table" and client.type or nil
+  for _, value in ipairs(type(section) == "table" and section.values or {}) do
+    local tags = type(value) == "table" and value.tags or nil
+    if
+      type(tags) == "table"
+      and tags.format == "project"
+      and non_empty_string(value.id)
+      and non_empty_string(value.name)
+      and non_empty_string(tags.build)
+    then
+      result[#result + 1] = {
+        id = value.id,
+        name = value.name,
+        build = tags.build,
+      }
+    end
+  end
+  return result
+end
+
 function M.resolve(catalog, selected_ids)
   local dependencies = {}
   local missing = {}

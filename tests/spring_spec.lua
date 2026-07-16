@@ -21,6 +21,9 @@ describe("Spring Initializr scaffolding", function()
       output = "/tmp/demo.tgz",
       group_id = "com.example",
       artifact_id = "demo api",
+      name = "Demo API",
+      description = "Custom Spring project",
+      package_name = "com.example.custom",
       java_version = "21",
       boot_version = "4.0.0",
       dependencies = { "web", "data-jpa" },
@@ -49,9 +52,11 @@ describe("Spring Initializr scaffolding", function()
       "--data-urlencode",
       "artifactId=demo api",
       "--data-urlencode",
-      "name=demo api",
+      "name=Demo API",
       "--data-urlencode",
-      "packageName=com.example.demoapi",
+      "description=Custom Spring project",
+      "--data-urlencode",
+      "packageName=com.example.custom",
       "--data-urlencode",
       "javaVersion=21",
       "--data-urlencode",
@@ -111,6 +116,7 @@ describe("Spring Initializr scaffolding", function()
       java_version = "21",
       dependencies = {},
       project_type = "maven-project",
+      build = "maven",
       language = "java",
       packaging = "jar",
     }, function(err, path)
@@ -150,6 +156,7 @@ describe("Spring Initializr scaffolding", function()
       java_version = "21",
       dependencies = {},
       project_type = "maven-project",
+      build = "maven",
       language = "java",
       packaging = "jar",
     }, function(err)
@@ -195,6 +202,7 @@ describe("Spring Initializr scaffolding", function()
       java_version = "21",
       dependencies = {},
       project_type = "maven-project",
+      build = "maven",
       language = "java",
       packaging = "jar",
     }, function(err)
@@ -217,5 +225,95 @@ describe("Spring Initializr scaffolding", function()
     assert_rejects_archive_link(
       "hrw-r--r--  0 user group 0 Jul 16 07:30 demo-api/link link to demo-api/pom.xml\n"
     )
+  end)
+
+  it("promotes Gradle Spring projects with Kotlin build files", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local project_dir
+    package.loaded["java_scaffold.process"] = {
+      run = function(command, args, _, callback)
+        if command == "curl" then
+          callback({ code = 0, stdout = "", stderr = "" })
+        elseif args[1] == "-tzf" then
+          callback({ code = 0, stdout = "demo-api/\ndemo-api/build.gradle.kts\n", stderr = "" })
+        elseif args[1] == "-tvzf" then
+          callback({
+            code = 0,
+            stdout = "drwxr-xr-x user/group 0 Jul 16 07:30 demo-api/\n"
+              .. "-rw-r--r-- user/group 0 Jul 16 07:30 demo-api/build.gradle.kts\n",
+            stderr = "",
+          })
+        else
+          local generated = vim.fs.joinpath(args[4], "demo-api")
+          vim.fn.mkdir(generated, "p")
+          vim.fn.writefile({ "plugins {}" }, vim.fs.joinpath(generated, "build.gradle.kts"))
+          callback({ code = 0, stdout = "", stderr = "" })
+        end
+      end,
+    }
+
+    spring.create({
+      url = "https://start.spring.io/starter.tgz",
+      cwd = cwd,
+      group_id = "com.example",
+      artifact_id = "demo-api",
+      java_version = "21",
+      dependencies = {},
+      project_type = "gradle-project-kotlin",
+      build = "gradle",
+      language = "java",
+      packaging = "jar",
+    }, function(err, path)
+      assert.is_nil(err)
+      project_dir = path
+    end)
+
+    assert.equals(vim.fs.joinpath(cwd, "demo-api"), project_dir)
+    assert.equals(1, vim.fn.filereadable(vim.fs.joinpath(project_dir, "build.gradle.kts")))
+  end)
+
+  it("rejects responses missing the selected build file", function()
+    for _, case in ipairs({
+      { build = "maven", expected = "pom.xml" },
+      { build = "gradle", expected = "build.gradle or build.gradle.kts" },
+    }) do
+      local cwd = vim.fn.tempname()
+      vim.fn.mkdir(cwd, "p")
+      temporary_directories[#temporary_directories + 1] = cwd
+      local received_error
+      package.loaded["java_scaffold.process"] = {
+        run = function(command, args, _, callback)
+          if command == "curl" then
+            callback({ code = 0, stdout = "", stderr = "" })
+          elseif args[1] == "-tzf" then
+            callback({ code = 0, stdout = "demo-api/\n", stderr = "" })
+          elseif args[1] == "-tvzf" then
+            callback({ code = 0, stdout = "drwxr-xr-x user/group 0 demo-api/\n", stderr = "" })
+          else
+            vim.fn.mkdir(vim.fs.joinpath(args[4], "demo-api"), "p")
+            callback({ code = 0, stdout = "", stderr = "" })
+          end
+        end,
+      }
+
+      spring.create({
+        url = "https://start.spring.io/starter.tgz",
+        cwd = cwd,
+        group_id = "com.example",
+        artifact_id = "demo-api",
+        java_version = "21",
+        dependencies = {},
+        project_type = case.build .. "-project",
+        build = case.build,
+        language = "java",
+        packaging = "jar",
+      }, function(err)
+        received_error = err
+      end)
+
+      assert.equals("Spring Initializr response contained no " .. case.expected, received_error)
+    end
   end)
 end)

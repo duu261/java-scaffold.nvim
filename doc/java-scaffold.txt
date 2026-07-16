@@ -15,9 +15,9 @@ CONTENTS                                         *java-scaffold-contents*
 1. INTRODUCTION                              *java-scaffold-introduction*
 
 java-scaffold.nvim creates Maven, Gradle, and Spring Boot projects from
-Neovim. It can add supported Spring dependencies to an existing pom.xml,
-open generated Java source for an existing Java or JDTLS setup, and pass a
-completed project to an optional handoff command.
+Neovim. It can add dependencies from a Spring catalog or Maven Central to an
+existing pom.xml, open generated Java source for an existing Java or JDTLS
+setup, and pass a completed project to an optional handoff command.
 
 Neovim 0.11+ and java are always required. Maven, Gradle, curl, tar, and
 Telescope are needed only by their respective workflows.
@@ -45,6 +45,9 @@ absolute paths, parent traversal, symlinks, and hardlinks are rejected.
       wrapper = false,
       project_version = "1.0-SNAPSHOT",
       timeout = 180000,
+      central_search_url = "https://search.maven.org/solrsearch/select",
+      central_search_rows = 20,
+      central_search_timeout = 15000,
       archetype = {
         group_id = "org.apache.maven.archetypes",
         artifact_id = "maven-archetype-quickstart",
@@ -155,9 +158,10 @@ then choose [Done].
 
                                                     *:JavaScaffoldSpring*
 :JavaScaffoldSpring
-    Prompt for destination, Spring project coordinates, language, packaging,
-    Java version, and dependencies. Review the project, then download and
-    extract a Spring Initializr Maven project.
+    Prompt for destination, coordinates, project name, description, package,
+    Boot version, Maven or Gradle project type, language, packaging, Java
+    version, and dependencies. Review the project, then download and extract
+    the Spring Initializr project.
 
                                                     *:JavaScaffoldGradle*
 :JavaScaffoldGradle
@@ -167,12 +171,14 @@ then choose [Done].
 
                                               *:JavaScaffoldAddDependency*
 :JavaScaffoldAddDependency
-    Find the nearest pom.xml, detect its Spring Boot version, resolve selected
-    Initializr dependency IDs, and insert non-duplicate dependency blocks.
-    BOM, repository, and annotation-processor entries are excluded in v1.
-    If Initializr no longer supplies an old Boot version's catalog, insertion
-    requires a valid same-URL cache, compatible custom server, or Boot
-    upgrade.
+    Find the nearest pom.xml. For Spring Boot, resolve selected Initializr
+    dependency IDs. For plain Maven, search Maven Central and select results
+    showing groupId:artifactId plus latest version. Insert non-duplicate
+    dependency blocks. BOM, repository, annotation-processor, and Maven
+    Central pom-packaging entries are excluded. If Initializr no longer
+    supplies an old Boot version's catalog, insertion requires a valid
+    same-URL cache, compatible custom server, or Boot upgrade. Maven Central
+    search needs live network access and has no offline fallback.
 
                                                *:JavaScaffoldClearCache*
 :JavaScaffoldClearCache
@@ -206,7 +212,8 @@ homes become scoped JAVA_HOME and PATH values; global shell state remains
 unchanged. Wrappers may override JAVA_HOME, so health checks and project
 creation report the detected runner Java.
 
-Spring choices come from Initializr metadata for the selected Boot version.
+Spring Boot versions and full-project Maven or Gradle types come from
+Initializr metadata. Dependency choices use the selected Boot version.
 
 ==============================================================================
 6. OFFLINE METADATA                            *java-scaffold-offline*
@@ -229,13 +236,16 @@ that still supplies the catalog.
 The plugin does not add unsupported Boot versions to new-project choices or
 bypass Initializr compatibility rules. Old-version lookup happens only when
 :JavaScaffoldAddDependency reads that version from an existing pom.xml.
+Plain Maven poms instead use live Maven Central search. The service may return
+HTTP 429; rerun later because arbitrary searches are not cached.
 
 ==============================================================================
 7. SCOPE AND TROUBLESHOOTING              *java-scaffold-troubleshooting*
 
-V1 owns Maven, Gradle, and Spring project creation plus Maven-based Spring
-dependency insertion. It deliberately does not run applications, format
-code, execute tests, edit Gradle dependencies, or manage JDTLS.
+V1 owns Maven, Gradle, and Spring project creation plus dependency insertion
+into Maven poms from Spring catalogs or Maven Central. It deliberately does
+not run applications, format code, execute tests, edit Gradle dependencies,
+or manage JDTLS.
 
 For failures:
 
@@ -246,7 +256,8 @@ For failures:
 4. For old-Boot catalog rejection, use a same-URL cache, compatible custom
    Initializr server, or upgrade Boot.
 5. Ensure custom Initializr URLs use HTTPS.
-6. An existing-target error means the path belongs to the user. Choose another
+6. Retry Maven Central search later after HTTP 429 or another network failure.
+7. An existing-target error means the path belongs to the user. Choose another
    artifact ID or move the target; the plugin will not delete it.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

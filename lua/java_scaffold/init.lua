@@ -381,6 +381,60 @@ local function choose_spring_options(client, config, callback)
   end)
 end
 
+local function choose_spring_project_type(client, config, callback)
+  local project_types = require("java_scaffold.metadata").project_types(client)
+  if #project_types == 0 then
+    callback({
+      id = config.spring.project_type,
+      build = config.spring.project_type:match("^gradle") and "gradle" or "maven",
+    })
+    return
+  end
+  require("java_scaffold.picker").select_one(project_types, {
+    prompt = "Spring project type",
+    default = config.spring.project_type,
+    format_item = function(item)
+      return item.name
+    end,
+  }, callback)
+end
+
+local function prompt_spring_fields(group_id, artifact_id, callback)
+  local picker = require("java_scaffold.picker")
+  local maven = require("java_scaffold.maven")
+  local derived_package = maven.package_name(group_id, artifact_id)
+  picker.input("Project name: ", artifact_id, function(name)
+    if name == nil then
+      return
+    end
+    name = vim.trim(name)
+    if name == "" then
+      name = artifact_id
+    end
+    picker.input("Description: ", "Demo project for Spring Boot", function(description)
+      if description == nil then
+        return
+      end
+      description = vim.trim(description)
+      picker.input("Package name: ", derived_package, function(package_name)
+        if package_name == nil then
+          return
+        end
+        package_name = vim.trim(package_name)
+        if package_name == "" then
+          package_name = derived_package
+        end
+        local package_error = maven.validate_package(package_name)
+        if package_error then
+          notify_error(package_error)
+          return
+        end
+        callback(name, description, package_name)
+      end)
+    end)
+  end)
+end
+
 function M.new_spring()
   notify("loading Spring Initializr metadata")
   fetch_client(function(metadata_error, client)
@@ -407,70 +461,101 @@ function M.new_spring()
             if not java_version then
               return
             end
-            local boot_version = metadata.default(client, "bootVersion")
-            fetch_catalog(boot_version, function(catalog_error, catalog)
-              if catalog_error then
-                notify_error(catalog_error)
+            local boot_versions = metadata.values(client, "bootVersion")
+            local default_boot = metadata.default(client, "bootVersion")
+            if #boot_versions == 0 and default_boot then
+              boot_versions = { default_boot }
+            end
+            require("java_scaffold.picker").select_one(boot_versions, {
+              prompt = "Spring Boot version",
+              default = default_boot,
+            }, function(boot_version)
+              if not boot_version then
                 return
               end
-              local dependencies = {}
-              for _, item in ipairs(metadata.flatten_dependencies(client)) do
-                if catalog.dependencies[item.id] then
-                  dependencies[#dependencies + 1] = item
-                end
-              end
-              require("java_scaffold.picker").select_many(dependencies, {
-                prompt = "Spring dependencies",
-                format_item = function(item)
-                  return string.format("%s  [%s]", item.name, item.group)
-                end,
-              }, function(selected)
-                if not selected then
+              choose_spring_project_type(client, config, function(project_type)
+                if not project_type then
                   return
                 end
-                local dependency_ids = vim.tbl_map(function(item)
-                  return item.id
-                end, selected)
-                choose_spring_options(client, config, function(language, packaging)
-                  if
-                    not confirm_project({
-                      { "Destination", vim.fs.joinpath(destination, artifact_id) },
-                      { "Coordinates", group_id .. ":" .. artifact_id },
-                      { "Build system", "Spring Boot Maven" },
-                      { "Java target", java_version },
-                      { "Runner JVM", "not used during generation" },
-                      { "Spring Boot", boot_version },
-                      { "Language", language },
-                      { "Packaging", packaging },
-                      {
-                        "Dependencies",
-                        #dependency_ids == 0 and "none" or table.concat(dependency_ids, ", "),
-                      },
-                    })
-                  then
-                    return
+                prompt_spring_fields(
+                  group_id,
+                  artifact_id,
+                  function(name, description, package_name)
+                    fetch_catalog(boot_version, function(catalog_error, catalog)
+                      if catalog_error then
+                        notify_error(catalog_error)
+                        return
+                      end
+                      local dependencies = {}
+                      for _, item in ipairs(metadata.flatten_dependencies(client)) do
+                        if catalog.dependencies[item.id] then
+                          dependencies[#dependencies + 1] = item
+                        end
+                      end
+                      require("java_scaffold.picker").select_many(dependencies, {
+                        prompt = "Spring dependencies",
+                        format_item = function(item)
+                          return string.format("%s  [%s]", item.name, item.group)
+                        end,
+                      }, function(selected)
+                        if not selected then
+                          return
+                        end
+                        local dependency_ids = vim.tbl_map(function(item)
+                          return item.id
+                        end, selected)
+                        choose_spring_options(client, config, function(language, packaging)
+                          if
+                            not confirm_project({
+                              { "Destination", vim.fs.joinpath(destination, artifact_id) },
+                              { "Coordinates", group_id .. ":" .. artifact_id },
+                              { "Name", name },
+                              { "Description", description == "" and "none" or description },
+                              { "Package", package_name },
+                              { "Build type", project_type.build },
+                              { "Java target", java_version },
+                              { "Runner JVM", "not used during generation" },
+                              { "Spring Boot", boot_version },
+                              { "Language", language },
+                              { "Packaging", packaging },
+                              {
+                                "Dependencies",
+                                #dependency_ids == 0 and "none"
+                                  or table.concat(dependency_ids, ", "),
+                              },
+                            })
+                          then
+                            return
+                          end
+                          notify("creating Spring project with Java " .. java_version)
+                          require("java_scaffold.spring").create({
+                            url = config.spring.starter_url,
+                            cwd = destination,
+                            group_id = group_id,
+                            artifact_id = artifact_id,
+                            name = name,
+                            description = description,
+                            package_name = package_name,
+                            java_version = java_version,
+                            boot_version = boot_version,
+                            dependencies = dependency_ids,
+                            project_type = project_type.id,
+                            build = project_type.build,
+                            language = language,
+                            packaging = packaging,
+                            timeout = config.spring.timeout,
+                          }, function(err, project_dir)
+                            if err then
+                              notify_error(err)
+                              return
+                            end
+                            finish_project(project_dir)
+                          end)
+                        end)
+                      end)
+                    end)
                   end
-                  notify("creating Spring project with Java " .. java_version)
-                  require("java_scaffold.spring").create({
-                    url = config.spring.starter_url,
-                    cwd = destination,
-                    group_id = group_id,
-                    artifact_id = artifact_id,
-                    java_version = java_version,
-                    boot_version = boot_version,
-                    dependencies = dependency_ids,
-                    project_type = config.spring.project_type,
-                    language = language,
-                    packaging = packaging,
-                    timeout = config.spring.timeout,
-                  }, function(err, project_dir)
-                    if err then
-                      notify_error(err)
-                      return
-                    end
-                    finish_project(project_dir)
-                  end)
-                end)
+                )
               end)
             end)
           end
@@ -536,7 +621,63 @@ function M.add_dependency()
   end
   local boot_version = require("java_scaffold.pom").spring_boot_version(lines)
   if not boot_version then
-    notify_error("Spring Boot version not found in pom.xml")
+    require("java_scaffold.picker").input("Maven Central search: ", "", function(term)
+      if not term or vim.trim(term) == "" then
+        return
+      end
+      term = vim.trim(term)
+      notify("searching Maven Central for " .. term)
+      require("java_scaffold.maven_central").search(term, function(search_error, choices)
+        if search_error then
+          notify_error(search_error)
+          return
+        end
+        if #choices == 0 then
+          notify("no Maven Central dependencies found")
+          return
+        end
+        require("java_scaffold.picker").select_many(choices, {
+          prompt = "Add Maven Central dependencies",
+          format_item = function(item)
+            return string.format("%s:%s  %s", item.group_id, item.artifact_id, item.version)
+          end,
+        }, function(selected)
+          if not selected or #selected == 0 then
+            return
+          end
+          local maven = require("java_scaffold.maven")
+          for _, dependency in ipairs(selected) do
+            local coordinate_error = maven.validate(dependency.group_id, dependency.artifact_id)
+            if coordinate_error then
+              notify_error("invalid Maven Central coordinate: " .. coordinate_error)
+              return
+            end
+          end
+          local latest_lines, buffer, was_modified = read_pom(pom_path)
+          if not latest_lines then
+            notify_error("cannot reread " .. pom_path)
+            return
+          end
+          if require("java_scaffold.pom").spring_boot_version(latest_lines) then
+            notify_error("pom.xml became a Spring Boot project; run command again")
+            return
+          end
+          local updated, added, insert_error =
+            require("java_scaffold.pom").insert(latest_lines, selected)
+          if insert_error then
+            notify_error(insert_error)
+            return
+          end
+          if added == 0 then
+            notify("selected dependencies already exist")
+            return
+          end
+          local saved = save_pom(pom_path, updated, buffer, was_modified)
+          local suffix = saved and "" or " (buffer left unsaved)"
+          notify(string.format("added %d dependencies%s", added, suffix))
+        end)
+      end)
+    end)
     return
   end
 

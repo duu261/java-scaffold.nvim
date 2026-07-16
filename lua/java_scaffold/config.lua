@@ -13,6 +13,9 @@ local defaults = {
     wrapper = false,
     project_version = "1.0-SNAPSHOT",
     timeout = 180000,
+    central_search_url = "https://search.maven.org/solrsearch/select",
+    central_search_rows = 20,
+    central_search_timeout = 15000,
     archetype = {
       group_id = "org.apache.maven.archetypes",
       artifact_id = "maven-archetype-quickstart",
@@ -165,6 +168,18 @@ local function validate(opts)
   if not positive_number(opts.maven.timeout) then
     warn("maven.timeout", "a positive number")
     opts.maven.timeout = defaults.maven.timeout
+  end
+  if not non_empty_string(opts.maven.central_search_url) then
+    warn("maven.central_search_url", "a non-empty string")
+    opts.maven.central_search_url = defaults.maven.central_search_url
+  end
+  if not positive_number(opts.maven.central_search_rows) then
+    warn("maven.central_search_rows", "a positive number")
+    opts.maven.central_search_rows = defaults.maven.central_search_rows
+  end
+  if not positive_number(opts.maven.central_search_timeout) then
+    warn("maven.central_search_timeout", "a positive number")
+    opts.maven.central_search_timeout = defaults.maven.central_search_timeout
   end
   for _, key in ipairs({ "group_id", "artifact_id", "version" }) do
     if not non_empty_string(opts.maven.archetype[key]) then

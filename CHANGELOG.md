@@ -8,6 +8,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 - Unified project generator picker through `:JavaScaffoldNew`.
 - Spring language and packaging pickers backed by Initializr metadata.
+- Spring project name, description, package, Boot version, and Maven or Gradle project type fields.
+- Maven Central dependency search for plain Maven poms.
 - Initializr metadata cache removal through `:JavaScaffoldClearCache`.
 - Explicit destination selection for every generator.
 - Pre-creation review and confirmation for Maven, Spring, and Gradle projects.

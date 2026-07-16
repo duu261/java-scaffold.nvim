@@ -19,6 +19,9 @@ describe("config", function()
     assert.equals("auto", opts.gradle.runner_java_version)
     assert.equals("java-application", opts.gradle.default_project_type)
     assert.equals("maven-archetype-quickstart", opts.maven.archetype.artifact_id)
+    assert.equals("https://search.maven.org/solrsearch/select", opts.maven.central_search_url)
+    assert.equals(20, opts.maven.central_search_rows)
+    assert.equals(15000, opts.maven.central_search_timeout)
     assert.is_false(opts.handoff.enabled)
   end)
 
@@ -45,6 +48,21 @@ describe("config", function()
     assert.equals("auto", opts.java_version)
     assert.is_false(opts.maven.wrapper)
     assert.is_false(opts.handoff.enabled)
+  end)
+
+  it("rejects invalid Maven Central search options", function()
+    config.setup({
+      maven = {
+        central_search_url = "",
+        central_search_rows = 0,
+        central_search_timeout = "slow",
+      },
+    })
+
+    local opts = config.get().maven
+    assert.equals("https://search.maven.org/solrsearch/select", opts.central_search_url)
+    assert.equals(20, opts.central_search_rows)
+    assert.equals(15000, opts.central_search_timeout)
   end)
 
   it("recovers from malformed nested options", function()

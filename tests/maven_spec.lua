@@ -76,6 +76,23 @@ describe("Maven scaffolding", function()
     assert.matches("artifactId", maven.validate("com.example", "../demo"))
   end)
 
+  it("validates Java package names", function()
+    for _, package_name in ipairs({ "com.example.demo", "example2.api", "_internal.api" }) do
+      assert.is_nil(maven.validate_package(package_name))
+    end
+    for _, package_name in ipairs({
+      "",
+      "1com.example",
+      "com.2example",
+      "com..example",
+      ".com.example",
+      "com.example.",
+      "com example",
+    }) do
+      assert.matches("package", maven.validate_package(package_name))
+    end
+  end)
+
   it("creates in staging before promoting the project", function()
     local cwd = temporary_directory()
     local callback_error

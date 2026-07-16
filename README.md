@@ -6,9 +6,9 @@ Create Maven, Gradle, and Spring Boot projects safely from Neovim, then open gen
 
 - Maven quickstart projects with optional Maven Wrapper generation.
 - Wrapper-backed Gradle applications, libraries, and Gradle plugins.
-- Spring Boot Maven projects using live Spring Initializr choices.
+- Spring Boot Maven and Gradle projects using live Spring Initializr choices.
 - Unified project generator picker plus direct workflow commands.
-- Safe Spring dependency insertion into an existing `pom.xml`.
+- Safe dependency insertion from Spring catalogs or Maven Central into an existing `pom.xml`.
 - Separate project Java target and Maven or Gradle runner JVM selection.
 - Private staging, target collision protection, structural POM edits, and offline metadata fallback.
 - Generated Java entry opening, `User JavaScaffoldProjectCreated`, and optional post-create handoff.
@@ -21,12 +21,14 @@ Create Maven, Gradle, and Spring Boot projects safely from Neovim, then open gen
 | `java` | Java discovery and project workflows |
 | `mvn` | Maven quickstart and optional Maven Wrapper generation |
 | `gradle` | Gradle project generation |
-| `curl` | Spring metadata, project downloads, and dependency catalogs |
+| `curl` | Spring requests and Maven Central dependency search |
 | `tar` | Spring archive inspection and extraction |
 | [Telescope](https://github.com/nvim-telescope/telescope.nvim) | Optional searchable single and multi-select pickers |
 | Any external project opener | Optional post-create handoff |
 
 Missing workflow-specific tools do not affect unrelated generators. Without Telescope, the plugin uses `vim.ui`.
+
+Maven Central search needs network access for every query. The service may throttle requests with HTTP 429; arbitrary searches have no offline fallback.
 
 ## 🚀 Installation
 
@@ -58,7 +60,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 1. Install plugin and restart Neovim.
 2. Run `:JavaScaffoldHealth` to load a lazy installation and check available tools.
 3. Run `:JavaScaffoldNew`, then choose Maven, Gradle, or Spring Boot. Direct workflow commands remain available.
-4. Choose the destination parent directory, coordinates, project options, Java target, and Spring dependencies when applicable.
+4. Choose the destination parent directory, coordinates, project options, Java target, and Spring dependencies when applicable. Spring also prompts for project name, description, package, Boot version, and Maven or Gradle build type.
 5. Review the final destination and selected settings, then confirm creation.
 
 Example:
@@ -76,8 +78,8 @@ Enter `~/Projects` as destination and `demo` as artifact ID to create `~/Project
 | `:JavaScaffoldNew` | Choose Maven, Gradle, or Spring Boot, then run its wizard |
 | `:JavaScaffoldMaven` | Create Maven quickstart project |
 | `:JavaScaffoldGradle` | Create Gradle application, library, or plugin |
-| `:JavaScaffoldSpring` | Create Spring Boot Maven project |
-| `:JavaScaffoldAddDependency` | Add supported Spring dependencies to nearest `pom.xml` |
+| `:JavaScaffoldSpring` | Create Spring Boot Maven or Gradle project |
+| `:JavaScaffoldAddDependency` | Add dependencies to nearest `pom.xml` from Spring catalog or Maven Central |
 | `:JavaScaffoldClearCache` | Delete all cached Initializr metadata and dependency catalogs |
 | `:JavaScaffoldLog` | Show internal operation log |
 | `:JavaScaffoldHealth` | Load lazy plugin and run its health check |
@@ -87,7 +89,7 @@ With Telescope, use `<Tab>` to toggle dependencies and `<Enter>` to finish. With
 Every generator asks for a destination parent directory, defaulting to Neovim's current working directory. A final review shows destination, coordinates, build system, Java target, runner JVM when applicable, and workflow-specific settings. Choosing `Cancel` starts no generator process.
 
 > [!IMPORTANT]
-> New Spring projects show only Boot versions offered by the configured Initializr server. `:JavaScaffoldAddDependency` instead reads the Boot version from an existing `pom.xml`. If the server no longer supplies that old version's catalog, insertion needs a previously cached catalog from the same configured URL, a compatible custom server, or a Boot upgrade.
+> New Spring projects show only Boot versions offered by the configured Initializr server. On a Spring Boot `pom.xml`, `:JavaScaffoldAddDependency` reads the existing Boot version. If the server no longer supplies that old version's catalog, insertion needs a previously cached catalog from the same configured URL, a compatible custom server, or a Boot upgrade. Plain Maven poms use live Maven Central search instead.
 
 ## Configuration
 
@@ -107,6 +109,9 @@ require("java_scaffold").setup({
     wrapper = false, -- generate Maven Wrapper before project promotion
     project_version = "1.0-SNAPSHOT",
     timeout = 180000,
+    central_search_url = "https://search.maven.org/solrsearch/select",
+    central_search_rows = 20,
+    central_search_timeout = 15000,
     archetype = {
       group_id = "org.apache.maven.archetypes",
       artifact_id = "maven-archetype-quickstart",
@@ -170,7 +175,7 @@ Discovery resolves duplicate JDK paths, caps each version probe at one second, a
 
 ## Spring metadata and dependency insertion
 
-Spring choices come from Initializr metadata. Unsupported active Java versions fall back to Initializr's default.
+Spring name, description, package, Boot version, full-project build type, language, packaging, Java, and dependency choices are collected before creation. Initializr metadata supplies available Boot versions and Maven or Gradle project types. Unsupported active Java versions fall back to Initializr's default.
 
 Initializr metadata, catalog, and project URLs must use HTTPS. Curl is restricted to HTTPS for both the original request and redirects.
 
@@ -179,6 +184,8 @@ Successful metadata and Boot-version catalogs are cached below `stdpath("cache")
 Run `:JavaScaffoldClearCache` when cached Initializr data becomes stale. Next metadata request fetches fresh data.
 
 Dependency insertion exposes only entries representable by one normal Maven `<dependency>` block. Entries requiring BOM import, custom repository, or annotation-processor wiring stay hidden. Those entries remain available during new Spring project creation, where Initializr can generate complete Maven configuration.
+
+For a plain Maven pom, `:JavaScaffoldAddDependency` prompts for a Maven Central query, shows `groupId:artifactId` plus latest version, and inserts selected non-`pom` artifacts. Ranking comes from Maven Central. Rerun the command to refine a query. Search has no cache or offline fallback.
 
 No Boot versions are hardcoded into the picker. Old-version lookup happens only when the dependency command reads an existing `pom.xml`.
 
@@ -229,7 +236,7 @@ Active Java wins when eligible and `prefer_active` is not `false`; otherwise the
 
 ## Scope and limits
 
-V1 owns Maven, Gradle, and Spring project creation plus Maven-based Spring dependency insertion.
+V1 owns Maven, Gradle, and Spring project creation plus dependency insertion into Maven poms from Spring catalogs or Maven Central.
 
 The plugin deliberately does not run applications, format code, execute tests, edit Gradle dependencies, or manage JDTLS. Existing tools remain responsible for those jobs.
 
@@ -240,7 +247,8 @@ The plugin deliberately does not run applications, format code, execute tests, e
 3. Check the executable required by the selected workflow.
 4. For old-Boot catalog rejection, use same-URL cache, compatible custom Initializr server, or upgrade Boot.
 5. Ensure custom Initializr URLs use HTTPS.
-6. If promotion reports an existing target, choose another artifact ID or move the user-created target.
+6. Retry Maven Central search later after HTTP 429 or another network failure; no offline search cache exists.
+7. If promotion reports an existing target, choose another artifact ID or move the user-created target.
 
 ## Local development
 

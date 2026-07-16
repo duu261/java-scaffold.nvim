@@ -1,5 +1,9 @@
 describe("plugin surface", function()
+  local original_cwd
+  local temporary_directories = {}
+
   before_each(function()
+    original_cwd = vim.fn.getcwd()
     vim.g.loaded_java_scaffold = nil
     package.loaded["java_scaffold"] = nil
     vim.cmd("runtime plugin/java-scaffold.lua")
@@ -10,9 +14,16 @@ describe("plugin surface", function()
     package.loaded["java_scaffold.gradle"] = nil
     package.loaded["java_scaffold.java"] = nil
     package.loaded["java_scaffold.maven"] = nil
+    package.loaded["java_scaffold.maven_central"] = nil
     package.loaded["java_scaffold.metadata"] = nil
     package.loaded["java_scaffold.picker"] = nil
+    package.loaded["java_scaffold.pom"] = nil
     package.loaded["java_scaffold.spring"] = nil
+    vim.cmd.cd(vim.fn.fnameescape(original_cwd))
+    for _, path in ipairs(temporary_directories) do
+      vim.fn.delete(path, "rf")
+    end
+    temporary_directories = {}
   end)
 
   it("registers lazy user commands", function()
@@ -74,18 +85,35 @@ describe("plugin surface", function()
     assert.same({ "maven", "gradle", "spring" }, routed)
   end)
 
-  it("uses selected Spring language and packaging", function()
+  it("uses selected Spring fields and options", function()
     local received = { pickers = {} }
     local destination = "/tmp"
     local client = {
       artifactId = { default = "demo" },
-      bootVersion = { default = "4.0.0" },
+      bootVersion = {
+        default = "4.0.0",
+        values = { { id = "3.5.4" }, { id = "4.0.0" } },
+      },
       javaVersion = { default = "21", values = { { id = "17" }, { id = "21" } } },
       language = {
         default = "java",
         values = { { id = "java" }, { id = "kotlin" }, { id = "groovy" } },
       },
       packaging = { default = "jar", values = { { id = "jar" }, { id = "war" } } },
+      type = {
+        values = {
+          {
+            id = "maven-project",
+            name = "Maven",
+            tags = { build = "maven", format = "project" },
+          },
+          {
+            id = "gradle-project-kotlin",
+            name = "Gradle - Kotlin",
+            tags = { build = "gradle", format = "project" },
+          },
+        },
+      },
       dependencies = { values = {} },
     }
     package.loaded["java_scaffold.config"] = {
@@ -115,6 +143,12 @@ describe("plugin surface", function()
       validate = function()
         return nil
       end,
+      package_name = function()
+        return "com.example.demo"
+      end,
+      validate_package = function()
+        return nil
+      end,
     }
     package.loaded["java_scaffold.metadata"] = {
       cache_path = function(kind)
@@ -125,6 +159,7 @@ describe("plugin surface", function()
       end,
       fetch_cached = function(url, _, _, callback)
         if url:find("dependencies", 1, true) then
+          received.catalog_url = url
           callback(nil, { dependencies = {} })
         else
           callback(nil, client)
@@ -144,10 +179,22 @@ describe("plugin surface", function()
           return item.id
         end, value[key].values)
       end,
+      project_types = function()
+        return {
+          { id = "maven-project", name = "Maven", build = "maven" },
+          { id = "gradle-project-kotlin", name = "Gradle - Kotlin", build = "gradle" },
+        }
+      end,
     }
     package.loaded["java_scaffold.picker"] = {
       input = function(prompt, default, callback)
-        callback(prompt == "Destination directory: " and destination or default)
+        local values = {
+          ["Destination directory: "] = destination,
+          ["Project name: "] = "Custom Demo",
+          ["Description: "] = "Custom description",
+          ["Package name: "] = "com.acme.demo",
+        }
+        callback(values[prompt] or default)
       end,
       confirm = function(prompt)
         received.review = prompt
@@ -159,8 +206,13 @@ describe("plugin surface", function()
           ["Spring language"] = "kotlin",
           ["Spring packaging"] = "war",
           ["Java version"] = "21",
+          ["Spring Boot version"] = "3.5.4",
         }
-        callback(selected[opts.prompt])
+        if opts.prompt == "Spring project type" then
+          callback(items[2])
+        else
+          callback(selected[opts.prompt])
+        end
       end,
       select_many = function(_, _, callback)
         callback({})
@@ -182,11 +234,173 @@ describe("plugin surface", function()
     assert.equals("kotlin", received.create.language)
     assert.equals("war", received.create.packaging)
     assert.equals(destination, received.create.cwd)
+    assert.equals("Custom Demo", received.create.name)
+    assert.equals("Custom description", received.create.description)
+    assert.equals("com.acme.demo", received.create.package_name)
+    assert.equals("3.5.4", received.create.boot_version)
+    assert.equals("gradle-project-kotlin", received.create.project_type)
+    assert.equals("gradle", received.create.build)
+    assert.is_truthy(received.catalog_url:find("bootVersion=3.5.4", 1, true))
+    assert.equals("maven-project", received.pickers["Spring project type"].default)
     assert.is_truthy(received.review:find("Destination: /tmp/demo", 1, true))
     assert.is_truthy(received.review:find("Coordinates: com.example:demo", 1, true))
-    assert.is_truthy(received.review:find("Build system: Spring Boot Maven", 1, true))
-    assert.is_truthy(received.review:find("Spring Boot: 4.0.0", 1, true))
+    assert.is_truthy(received.review:find("Name: Custom Demo", 1, true))
+    assert.is_truthy(received.review:find("Description: Custom description", 1, true))
+    assert.is_truthy(received.review:find("Package: com.acme.demo", 1, true))
+    assert.is_truthy(received.review:find("Build type: gradle", 1, true))
+    assert.is_truthy(received.review:find("Spring Boot: 3.5.4", 1, true))
     assert.is_truthy(received.review:find("Dependencies: none", 1, true))
+  end)
+
+  it("uses Maven Central for plain Maven poms and rereads before insertion", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    vim.fn.writefile({ "<project>", "  <artifactId>demo</artifactId>", "</project>" }, pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local received = {}
+
+    package.loaded["java_scaffold.pom"] = {
+      spring_boot_version = function()
+        return nil
+      end,
+      insert = function(lines, dependencies)
+        received.lines = lines
+        received.dependencies = dependencies
+        return lines, #dependencies
+      end,
+    }
+    package.loaded["java_scaffold.maven"] = {
+      validate = function(group_id, artifact_id)
+        received.validated = group_id .. ":" .. artifact_id
+      end,
+    }
+    package.loaded["java_scaffold.maven_central"] = {
+      search = function(term, callback)
+        received.term = term
+        callback(nil, {
+          {
+            group_id = "com.google.guava",
+            artifact_id = "guava",
+            version = "33.4.8-jre",
+            packaging = "jar",
+          },
+        })
+      end,
+    }
+    package.loaded["java_scaffold.picker"] = {
+      input = function(_, _, callback)
+        callback("guava")
+      end,
+      select_many = function(items, opts, callback)
+        assert.equals("Add Maven Central dependencies", opts.prompt)
+        assert.equals("com.google.guava:guava  33.4.8-jre", opts.format_item(items[1]))
+        vim.fn.writefile({
+          "<project>",
+          "  <artifactId>demo</artifactId>",
+          "  <name>changed while picker was open</name>",
+          "</project>",
+        }, pom_path)
+        callback(items)
+      end,
+    }
+
+    require("java_scaffold").add_dependency()
+
+    assert.equals("guava", received.term)
+    assert.equals("com.google.guava:guava", received.validated)
+    assert.same({
+      {
+        group_id = "com.google.guava",
+        artifact_id = "guava",
+        version = "33.4.8-jre",
+        packaging = "jar",
+      },
+    }, received.dependencies)
+    assert.is_truthy(table.concat(received.lines, "\n"):find("changed while picker", 1, true))
+  end)
+
+  it("keeps Spring catalog insertion for Boot poms", function()
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    vim.fn.writefile({ "<project>", "</project>" }, vim.fs.joinpath(cwd, "pom.xml"))
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local received = {}
+
+    package.loaded["java_scaffold.config"] = {
+      get = function()
+        return {
+          spring = {
+            metadata_url = "https://initializr.test",
+            dependencies_url = "https://initializr.test/dependencies",
+          },
+        }
+      end,
+    }
+    package.loaded["java_scaffold.pom"] = {
+      spring_boot_version = function()
+        return "3.5.4"
+      end,
+      insert = function(lines, dependencies)
+        received.dependencies = dependencies
+        return lines, #dependencies
+      end,
+    }
+    package.loaded["java_scaffold.metadata"] = {
+      cache_path = function(kind)
+        return kind
+      end,
+      fetch_cached = function(url, _, _, callback)
+        if url:find("dependencies", 1, true) then
+          callback(nil, { dependencies = { web = {} } })
+        else
+          callback(nil, { dependencies = {} })
+        end
+      end,
+      flatten_dependencies = function()
+        return { { id = "web", name = "Spring Web", group = "Web" } }
+      end,
+      is_catalog = function()
+        return true
+      end,
+      is_client = function()
+        return true
+      end,
+      is_direct = function()
+        return true
+      end,
+      resolve = function()
+        return {
+          { group_id = "org.springframework.boot", artifact_id = "spring-boot-starter-web" },
+        }, {}
+      end,
+    }
+    package.loaded["java_scaffold.maven_central"] = {
+      search = function()
+        error("Maven Central path must not run")
+      end,
+    }
+    package.loaded["java_scaffold.picker"] = {
+      input = function()
+        error("search prompt must not run")
+      end,
+      select_many = function(items, opts, callback)
+        assert.equals("Add Spring dependencies", opts.prompt)
+        callback(items)
+      end,
+    }
+
+    require("java_scaffold").add_dependency()
+
+    assert.same({
+      { group_id = "org.springframework.boot", artifact_id = "spring-boot-starter-web" },
+    }, received.dependencies)
   end)
 
   it("caches public Java runtime discovery", function()

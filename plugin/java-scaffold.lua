@@ -21,7 +21,7 @@ end, { desc = "Create a Spring Boot project", force = true })
 
 vim.api.nvim_create_user_command("JavaScaffoldAddDependency", function()
   require("java_scaffold").add_dependency()
-end, { desc = "Add Spring dependencies to pom.xml", force = true })
+end, { desc = "Add dependencies to pom.xml (Spring catalog or Maven Central)", force = true })
 
 vim.api.nvim_create_user_command("JavaScaffoldClearCache", function()
   require("java_scaffold").clear_cache()

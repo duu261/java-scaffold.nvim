@@ -23,6 +23,24 @@ function M.package_name(group_id, artifact_id)
   return table.concat(parts, ".")
 end
 
+function M.validate_package(package_name)
+  if
+    type(package_name) ~= "string"
+    or package_name == ""
+    or package_name:sub(1, 1) == "."
+    or package_name:sub(-1) == "."
+    or package_name:find("..", 1, true)
+    or package_name:find("%s")
+  then
+    return "package name contains invalid segments"
+  end
+  for segment in package_name:gmatch("[^.]+") do
+    if not segment:match("^[%a_$][%w_$]*$") then
+      return "package name contains invalid segments"
+    end
+  end
+end
+
 function M.validate(group_id, artifact_id)
   if
     type(group_id) ~= "string"
