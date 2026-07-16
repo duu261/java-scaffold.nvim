@@ -473,6 +473,79 @@ local function same_dependency(left, right)
     and left.artifact_id == right.artifact_id
 end
 
+local function select_dependency_upgrade(pom_path, selected, available_versions)
+  local versions = vim.deepcopy(available_versions)
+  if #versions == 0 then
+    notify("no Maven Central versions found for " .. dependency_label(selected))
+    return
+  end
+  if not vim.tbl_contains(versions, selected.version) then
+    versions[#versions + 1] = selected.version
+  end
+  require("duke.picker").select_one(versions, {
+    prompt = "Maven Central version",
+    default = versions[1],
+    format_item = function(version)
+      return version == selected.version and (version .. "  (current)") or version
+    end,
+  }, function(version)
+    if not version then
+      return
+    end
+    if version == selected.version then
+      notify(dependency_label(selected) .. " already uses version " .. version)
+      return
+    end
+
+    local latest_lines, buffer, was_modified = read_pom(pom_path)
+    if not latest_lines then
+      notify_error("cannot reread " .. pom_path)
+      return
+    end
+    local latest_dependencies, latest_error = require("duke.pom").list(latest_lines)
+    if latest_error then
+      notify_error(latest_error)
+      return
+    end
+    local latest = latest_dependencies[selected.index]
+    if not same_dependency(latest, selected) or latest.version ~= selected.version then
+      notify_error("pom.xml dependency changed; run command again")
+      return
+    end
+    local updated, update_error = require("duke.pom").update_version(latest_lines, latest, version)
+    if update_error then
+      notify_error(update_error)
+      return
+    end
+    local saved = save_pom(pom_path, updated, buffer, was_modified)
+    local suffix = saved and "" or " (buffer left unsaved)"
+    notify(string.format("updated %s to version %s%s", dependency_label(latest), version, suffix))
+  end)
+end
+
+local function upgrade_dependency(pom_path, selected, available_versions)
+  local property = selected.version:match("^%${([%w_.-]+)}$")
+  if property then
+    notify_error("cannot update dependency version property " .. property)
+    return
+  end
+  if available_versions then
+    select_dependency_upgrade(pom_path, selected, available_versions)
+    return
+  end
+  require("duke.maven_central").versions(
+    selected.group_id,
+    selected.artifact_id,
+    function(version_error, versions)
+      if version_error then
+        notify_error(version_error)
+        return
+      end
+      select_dependency_upgrade(pom_path, selected, versions)
+    end
+  )
+end
+
 function M.update_dependency()
   local pom_path = nearest_pom()
   if not pom_path then
@@ -519,72 +592,136 @@ function M.update_dependency()
     if not selected then
       return
     end
-    local property = selected.version:match("^%${([%w_.-]+)}$")
-    if property then
-      notify_error("cannot update dependency version property " .. property)
+    upgrade_dependency(pom_path, selected)
+  end)
+end
+
+local function skipped_outdated_notice(managed, property_backed)
+  local parts = {}
+  if managed > 0 then
+    parts[#parts + 1] =
+      string.format("%d managed %s", managed, managed == 1 and "dependency" or "dependencies")
+  end
+  if property_backed > 0 then
+    parts[#parts + 1] = string.format(
+      "%d property-backed %s",
+      property_backed,
+      property_backed == 1 and "dependency" or "dependencies"
+    )
+  end
+  return table.concat(parts, " and ") .. " skipped"
+end
+
+function M.outdated_dependencies()
+  local pom_path = nearest_pom()
+  if not pom_path then
+    notify_error("no pom.xml found in current directory or parents")
+    return
+  end
+  local lines = read_pom(pom_path)
+  if not lines then
+    notify_error("cannot read " .. pom_path)
+    return
+  end
+  local dependencies, list_error = require("duke.pom").list(lines)
+  if list_error then
+    notify_error(list_error)
+    return
+  end
+
+  local candidates = {}
+  local managed = 0
+  local property_backed = 0
+  for _, dependency in ipairs(dependencies) do
+    if not dependency.version then
+      managed = managed + 1
+    elseif dependency.version:find("${", 1, true) then
+      property_backed = property_backed + 1
+    else
+      candidates[#candidates + 1] = dependency
+    end
+  end
+  local skipped = managed + property_backed
+  if #candidates == 0 then
+    if skipped > 0 then
+      notify(skipped_outdated_notice(managed, property_backed) .. "; no dependencies to check")
+    else
+      notify("no root dependencies with literal explicit versions found")
+    end
+    return
+  end
+  if skipped > 0 then
+    notify(skipped_outdated_notice(managed, property_backed))
+  end
+
+  local outdated = {}
+  local checked = 0
+  local index = 1
+  local function present(unchecked, lookup_error)
+    if unchecked > 0 then
+      local noun = unchecked == 1 and "dependency" or "dependencies"
+      notify(
+        string.format(
+          "%d %s not checked after Maven Central error: %s",
+          unchecked,
+          noun,
+          lookup_error
+        ),
+        vim.log.levels.WARN
+      )
+    end
+    if #outdated == 0 then
+      if unchecked == 0 then
+        notify(string.format("%d dependencies checked, all up to date", checked))
+      end
       return
     end
+    require("duke.picker").select_one(outdated, {
+      prompt = "Outdated Maven dependencies",
+      format_item = function(item)
+        return string.format(
+          "%s  %s -> %s",
+          dependency_label(item.dependency),
+          item.dependency.version,
+          item.latest
+        )
+      end,
+    }, function(selected)
+      if selected then
+        upgrade_dependency(pom_path, selected.dependency, selected.versions)
+      end
+    end)
+  end
 
+  local function inspect_next()
+    if index > #candidates then
+      present(0)
+      return
+    end
+    local dependency = candidates[index]
     require("duke.maven_central").versions(
-      selected.group_id,
-      selected.artifact_id,
+      dependency.group_id,
+      dependency.artifact_id,
       function(version_error, versions)
         if version_error then
-          notify_error(version_error)
+          present(#candidates - index + 1, version_error)
           return
         end
-        if #versions == 0 then
-          notify("no Maven Central versions found for " .. dependency_label(selected))
-          return
+        checked = checked + 1
+        local latest = versions[1]
+        if latest and latest ~= dependency.version then
+          outdated[#outdated + 1] = {
+            dependency = dependency,
+            latest = latest,
+            versions = versions,
+          }
         end
-        if not vim.tbl_contains(versions, selected.version) then
-          versions[#versions + 1] = selected.version
-        end
-        require("duke.picker").select_one(versions, {
-          prompt = "Maven Central version",
-          default = versions[1],
-          format_item = function(version)
-            return version == selected.version and (version .. "  (current)") or version
-          end,
-        }, function(version)
-          if not version then
-            return
-          end
-          if version == selected.version then
-            notify(dependency_label(selected) .. " already uses version " .. version)
-            return
-          end
-
-          local latest_lines, buffer, was_modified = read_pom(pom_path)
-          if not latest_lines then
-            notify_error("cannot reread " .. pom_path)
-            return
-          end
-          local latest_dependencies, latest_error = require("duke.pom").list(latest_lines)
-          if latest_error then
-            notify_error(latest_error)
-            return
-          end
-          local latest = latest_dependencies[selected.index]
-          if not same_dependency(latest, selected) or latest.version ~= selected.version then
-            notify_error("pom.xml dependency changed; run command again")
-            return
-          end
-          local updated, update_error =
-            require("duke.pom").update_version(latest_lines, latest, version)
-          if update_error then
-            notify_error(update_error)
-            return
-          end
-          local saved = save_pom(pom_path, updated, buffer, was_modified)
-          local suffix = saved and "" or " (buffer left unsaved)"
-          notify(
-            string.format("updated %s to version %s%s", dependency_label(latest), version, suffix)
-          )
-        end)
+        index = index + 1
+        inspect_next()
       end
     )
-  end)
+  end
+  inspect_next()
 end
 
 function M.remove_dependency()

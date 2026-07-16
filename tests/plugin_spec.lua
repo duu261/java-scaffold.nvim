@@ -29,6 +29,18 @@ describe("plugin surface", function()
     temporary_directories = {}
   end)
 
+  local function open_pom(lines)
+    local cwd = vim.fn.tempname()
+    vim.fn.mkdir(cwd, "p")
+    temporary_directories[#temporary_directories + 1] = cwd
+    local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    vim.fn.writefile(lines, pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    return pom_path
+  end
+
   it("registers lazy user commands", function()
     assert.equals(2, vim.fn.exists(":DukeNew"))
     assert.equals(2, vim.fn.exists(":DukeMaven"))
@@ -37,6 +49,7 @@ describe("plugin surface", function()
     assert.equals(2, vim.fn.exists(":DukeAdd"))
     assert.equals(2, vim.fn.exists(":DukeUpgrade"))
     assert.equals(2, vim.fn.exists(":DukeRemove"))
+    assert.equals(2, vim.fn.exists(":DukeOutdated"))
     assert.equals(2, vim.fn.exists(":DukeClearCache"))
     assert.equals(2, vim.fn.exists(":DukeLog"))
     assert.equals(2, vim.fn.exists(":DukeHealth"))
@@ -51,6 +64,7 @@ describe("plugin surface", function()
     assert.is_function(plugin.add_dependency)
     assert.is_function(plugin.update_dependency)
     assert.is_function(plugin.remove_dependency)
+    assert.is_function(plugin.outdated_dependencies)
     assert.is_function(plugin.clear_cache)
     assert.is_function(plugin.java_runtimes)
     assert.is_function(plugin.select_runtime)
@@ -598,6 +612,184 @@ describe("plugin surface", function()
 
     assert.same(pom_lines("1.1"), vim.fn.readfile(pom_path))
     assert.is_truthy(table.concat(notices, "\n"):find("changed", 1, true))
+  end)
+
+  it("lists outdated dependencies sequentially and enters the upgrade flow", function()
+    local original = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>junit</groupId>",
+      "      <artifactId>junit</artifactId>",
+      "      <version>3.8.1</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>current</artifactId>",
+      "      <version>1.0</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>property</artifactId>",
+      "      <version>${property.version}</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>org.springframework.boot</groupId>",
+      "      <artifactId>spring-boot-starter-web</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local pom_path = open_pom(original)
+    local lookups = {}
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["duke.maven_central"] = {
+      versions = function(group_id, artifact_id, callback)
+        lookups[#lookups + 1] = group_id .. ":" .. artifact_id
+        if artifact_id == "junit" then
+          callback(nil, { "4.13.2", "3.8.1" })
+        else
+          callback(nil, { "1.0" })
+        end
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      select_one = function(items, opts, callback)
+        if opts.prompt == "Outdated Maven dependencies" then
+          assert.equals(1, #items)
+          assert.equals("junit:junit  3.8.1 -> 4.13.2", opts.format_item(items[1]))
+          callback(items[1])
+          return
+        end
+        assert.equals("Maven Central version", opts.prompt)
+        assert.same({ "4.13.2", "3.8.1" }, items)
+        assert.equals("4.13.2", opts.default)
+        callback(nil)
+      end,
+    }
+
+    require("duke").outdated_dependencies()
+
+    assert.same({ "junit:junit", "com.example:current" }, lookups)
+    assert.is_truthy(table.concat(notices, "\n"):find("1 managed dependency", 1, true))
+    assert.is_truthy(table.concat(notices, "\n"):find("1 property-backed dependency", 1, true))
+    assert.same(original, vim.fn.readfile(pom_path))
+  end)
+
+  it("shows partial outdated results and stops after a rate limit", function()
+    local original = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>first</artifactId>",
+      "      <version>1.0</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>limited</artifactId>",
+      "      <version>1.0</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>unchecked</artifactId>",
+      "      <version>1.0</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local pom_path = open_pom(original)
+    local lookups = {}
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, artifact_id, callback)
+        lookups[#lookups + 1] = artifact_id
+        if artifact_id == "limited" then
+          callback("Maven Central HTTP 429: rate limited")
+        else
+          callback(nil, { "2.0", "1.0" })
+        end
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      select_one = function(items, opts, callback)
+        assert.equals("Outdated Maven dependencies", opts.prompt)
+        assert.equals(1, #items)
+        assert.equals("com.example:first  1.0 -> 2.0", opts.format_item(items[1]))
+        callback(nil)
+      end,
+    }
+
+    require("duke").outdated_dependencies()
+
+    assert.same({ "first", "limited" }, lookups)
+    assert.is_truthy(table.concat(notices, "\n"):find("2 dependencies not checked", 1, true))
+    assert.same(original, vim.fn.readfile(pom_path))
+  end)
+
+  it("reports managed-only and up-to-date dependency sets without a picker", function()
+    local managed = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>org.springframework.boot</groupId>",
+      "      <artifactId>spring-boot-starter-web</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local pom_path = open_pom(managed)
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["duke.maven_central"] = {
+      versions = function()
+        error("managed dependency must not be looked up")
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      select_one = function()
+        error("managed-only result must not open a picker")
+      end,
+    }
+
+    require("duke").outdated_dependencies()
+
+    assert.equals(1, #notices)
+    assert.is_truthy(notices[1]:find("1 managed dependency skipped", 1, true))
+    assert.same(managed, vim.fn.readfile(pom_path))
+
+    local current = {
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>current</artifactId>",
+      "      <version>1.0</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    vim.fn.writefile(current, pom_path)
+    notices = {}
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, _, callback)
+        callback(nil, { "1.0" })
+      end,
+    }
+
+    require("duke").outdated_dependencies()
+
+    assert.equals(1, #notices)
+    assert.is_truthy(notices[1]:find("1 dependencies checked, all up to date", 1, true))
+    assert.same(current, vim.fn.readfile(pom_path))
   end)
 
   it("removes multiple Maven dependencies only after confirmation", function()

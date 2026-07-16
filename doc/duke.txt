@@ -125,6 +125,10 @@ update_dependency()               *duke.update_dependency()*
     Find the nearest pom.xml and update one explicit root dependency version
     through the same workflow as :DukeUpgrade.
 
+outdated_dependencies()       *duke.outdated_dependencies()*
+    Find the nearest pom.xml and compare literal explicit root dependency
+    versions through the same workflow as :DukeOutdated.
+
 remove_dependency()               *duke.remove_dependency()*
     Find the nearest pom.xml and remove confirmed root dependency blocks
     through the same workflow as :DukeRemove.
@@ -223,6 +227,15 @@ then choose [Done].
     newest-first order. The current version is marked and selecting it is a
     no-op. Property-backed versions are rejected with the property name. Only
     version text changes; scope and all other block content stay untouched.
+
+                                          *:DukeOutdated*
+:DukeOutdated
+    Find the nearest pom.xml and check root dependencies with literal explicit
+    versions sequentially against Maven Central. Managed and property-backed
+    versions are skipped with counts. Timeout or HTTP 429 stops later lookups,
+    preserves gathered rows, and reports the unchecked count. Rows show
+    current -> latest. Selecting one enters the DukeUpgrade version picker and
+    stale-file-safe write path. Canceling changes nothing.
 
                                            *:DukeRemove*
 :DukeRemove

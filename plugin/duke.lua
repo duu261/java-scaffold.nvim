@@ -27,6 +27,10 @@ vim.api.nvim_create_user_command("DukeUpgrade", function()
   require("duke").update_dependency()
 end, { desc = "Update a root pom.xml dependency from Maven Central", force = true })
 
+vim.api.nvim_create_user_command("DukeOutdated", function()
+  require("duke").outdated_dependencies()
+end, { desc = "List outdated root pom.xml dependencies", force = true })
+
 vim.api.nvim_create_user_command("DukeRemove", function()
   require("duke").remove_dependency()
 end, { desc = "Remove confirmed root pom.xml dependencies", force = true })

@@ -61,6 +61,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
     "DukeSpring",
     "DukeAdd",
     "DukeUpgrade",
+    "DukeOutdated",
     "DukeRemove",
     "DukeClearCache",
     "DukeLog",
@@ -98,6 +99,7 @@ Enter `~/Projects` as destination and `demo` as artifact ID to create `~/Project
 | `:DukeSpring` | Create Spring Boot Maven or Gradle project |
 | `:DukeAdd` | Add dependencies to nearest `pom.xml` from Spring catalog or Maven Central |
 | `:DukeUpgrade` | Update one explicit root dependency version from Maven Central |
+| `:DukeOutdated` | Compare literal root dependency versions with Maven Central |
 | `:DukeRemove` | Remove selected root dependencies after confirmation |
 | `:DukeClearCache` | Delete all cached Initializr metadata and dependency catalogs |
 | `:DukeLog` | Show internal operation log |
@@ -219,6 +221,8 @@ For a plain Maven pom, `:DukeAdd` prompts for a Maven Central query and shows `g
 
 `:DukeUpgrade` lists root dependencies with explicit `<version>` elements and updates one per run from Maven Central's newest-first version list. The current version is marked; selecting it is a no-op. Managed dependencies without a version are hidden with a count notice. Property-backed versions such as `${library.version}` are listed but rejected with the property name because property editing is outside plugin scope. Only version text changes; scope, type, classifier, exclusions, comments, and formatting stay untouched.
 
+`:DukeOutdated` checks root dependencies with literal explicit versions sequentially against Maven Central and lists `current -> latest` rows. Managed and property-backed versions are skipped with counts. A timeout or HTTP 429 stops further lookups but keeps gathered rows and reports how many dependencies were not checked. Selecting a row enters the same single-dependency version picker and stale-file-safe write path as `:DukeUpgrade`; canceling leaves the POM untouched.
+
 `:DukeRemove` lists all root dependencies, including managed ones, and supports multi-select. A mandatory confirmation names every selected coordinate. Declining or canceling changes nothing. Removal deletes complete dependency blocks but keeps the root `<dependencies>` container, sibling blocks, comments, and surrounding blank-line formatting.
 
 No Boot versions are hardcoded into the picker. Old-version lookup happens only when the dependency command reads an existing `pom.xml`.
@@ -243,7 +247,7 @@ handoff = {
 
 ## Lua API
 
-`require("duke").new()` opens the unified generator picker. `new_maven()`, `new_gradle()`, and `new_spring()` start individual wizards directly. `add_dependency()`, `update_dependency()`, and `remove_dependency()` start the same nearest-`pom.xml` workflows as their commands. `clear_cache()` deletes all cached Initializr metadata and returns `true` on success.
+`require("duke").new()` opens the unified generator picker. `new_maven()`, `new_gradle()`, and `new_spring()` start individual wizards directly. `add_dependency()`, `update_dependency()`, `outdated_dependencies()`, and `remove_dependency()` start the same nearest-`pom.xml` workflows as their commands. `clear_cache()` deletes all cached Initializr metadata and returns `true` on success.
 
 `require("duke").java_runtimes(opts)` returns discovered JDK homes for plugin or editor integration:
 
