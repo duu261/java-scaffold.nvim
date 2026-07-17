@@ -248,8 +248,12 @@ outdated({opts}, {callback})             *duke.outdated()*
         skipped = { managed = 0, property_backed = 0 },
         unchecked = 0,
         warning = nil,
+        managing_parent = "spring-boot-starter-parent",  -- optional
       }
 <
+    Each dependency row may carry managed = true and a managing_parent field
+    when the version was resolved from a parent or BOM rather than an explicit
+    <version> element:
     dependencies contains only outdated rows. All-current succeeds with an
     empty list. A timeout or HTTP 429 after at least one completed lookup
     returns ok = true, partial rows, warning, and the exact unchecked count.
@@ -406,15 +410,20 @@ then choose [Done].
 
                                            *:DukeUpgrade*
 :DukeUpgrade
-    Find the nearest pom.xml and list root dependencies with explicit version
-    elements. Managed dependencies without versions are hidden with a count
-    notice. Select one dependency, then choose from Maven Central versions in
-    newest-first order. The current version is marked and selecting it is a
-    no-op. Property-backed versions are rejected with the property name. Only
-    version text changes; scope and all other block content stay untouched.
-    POM writes skip write autocommands, so a format-on-save chain cannot
-    reformat the file around the edit and bury it in a whole-file diff. A
-    manual :w still formats the buffer as configured.
+    Find the nearest pom.xml and list root dependencies. Managed
+    dependencies whose version comes from a parent or BOM are shown with
+    their version resolved by `mvn dependency:list` and marked as managed;
+    selecting one notifies about :DukeBootUpgrade instead of opening a
+    version picker. :DukeUpgrade degrades to the prior hidden-with-count
+    behavior when `mvn` is missing or the project fails to resolve. For
+    explicit-version dependencies the behavior is unchanged: select one,
+    then choose from Maven Central versions in newest-first order. The
+    current version is marked and selecting it is a no-op. Property-backed
+    versions are rejected with the property name. Only version text changes;
+    scope and all other block content stay untouched. POM writes skip write
+    autocommands, so a format-on-save chain cannot reformat the file around
+    the edit and bury it in a whole-file diff. A manual :w still formats
+    the buffer as configured.
 
                                        *:DukeBootUpgrade*
 :DukeBootUpgrade
@@ -429,12 +438,18 @@ then choose [Done].
 
                                           *:DukeOutdated*
 :DukeOutdated
-    Find the nearest pom.xml and check root dependencies with literal explicit
-    versions sequentially against Maven Central. Managed and property-backed
-    versions are skipped with counts. Timeout or HTTP 429 stops later lookups,
+    Find the nearest pom.xml and check root dependencies with literal
+    explicit or managed versions sequentially against Maven Central. Managed
+    versions are resolved by `mvn dependency:list` and marked with their
+    managing parent when available. If `mvn` is missing or the project fails
+    to resolve, managed dependencies degrade to the prior skipped-with-count
+    behavior and explicit-version rows still work. Property-backed versions
+    are skipped with counts. Timeout or HTTP 429 stops later lookups,
     preserves gathered rows, and reports the unchecked count. Rows show
-    current -> latest. Selecting one enters the DukeUpgrade version picker and
-    stale-file-safe write path. Canceling changes nothing.
+    current -> latest. Selecting a managed row notifies about
+    :DukeBootUpgrade and writes nothing. Selecting an explicit-version row
+    enters the DukeUpgrade version picker and stale-file-safe write path.
+    Canceling changes nothing.
 
                                            *:DukeRemove*
 :DukeRemove

@@ -859,4 +859,97 @@ describe("POM editing", function()
       assert.matches("sharing lines", shared_err)
     end)
   end)
+
+  describe("mvn dependency:list line parsing", function()
+    local managed
+
+    before_each(function()
+      package.loaded["duke.managed"] = nil
+      managed = require("duke.managed")
+    end)
+
+    it("parses a normal dependency line with compile scope", function()
+      local dep =
+        managed.parse_line("org.springframework.boot:spring-boot-starter-web:jar:3.5.3:compile")
+      assert.is_table(dep)
+      assert.equals("org.springframework.boot", dep.group_id)
+      assert.equals("spring-boot-starter-web", dep.artifact_id)
+      assert.equals("3.5.3", dep.version)
+    end)
+
+    it("parses a line with test scope", function()
+      local dep = managed.parse_line("com.example:my-lib:jar:1.0:test")
+      assert.is_table(dep)
+      assert.equals("com.example", dep.group_id)
+      assert.equals("my-lib", dep.artifact_id)
+      assert.equals("1.0", dep.version)
+    end)
+
+    it("parses a line with runtime scope", function()
+      local dep = managed.parse_line("com.example:rt:jar:2.0:runtime")
+      assert.is_table(dep)
+      assert.equals("com.example", dep.group_id)
+      assert.equals("rt", dep.artifact_id)
+      assert.equals("2.0", dep.version)
+    end)
+
+    it("parses a line with -- module name [auto] suffix", function()
+      local dep = managed.parse_line(
+        "org.springframework.boot:spring-boot:jar:3.5.3:compile -- module spring-boot [auto]"
+      )
+      assert.is_table(dep)
+      assert.equals("org.springframework.boot", dep.group_id)
+      assert.equals("spring-boot", dep.artifact_id)
+      assert.equals("3.5.3", dep.version)
+    end)
+
+    it("parses a line with a classifier", function()
+      local dep = managed.parse_line("com.example:lib:jar:tests:1.0:test")
+      assert.is_table(dep)
+      assert.equals("com.example", dep.group_id)
+      assert.equals("lib", dep.artifact_id)
+      assert.equals("1.0", dep.version)
+    end)
+
+    it("rejects garbage input", function()
+      assert.is_nil(managed.parse_line(nil))
+      assert.is_nil(managed.parse_line(""))
+      assert.is_nil(managed.parse_line("not a maven coordinate"))
+      assert.is_nil(managed.parse_line("only:three:parts"))
+      assert.is_nil(managed.parse_line(":::"))
+      assert.is_nil(managed.parse_line("g:a:p:"))
+    end)
+
+    it("rejects lines with empty groupId or artifactId", function()
+      assert.is_nil(managed.parse_line(":artifact:jar:1.0:compile"))
+      assert.is_nil(managed.parse_line("group::jar:1.0:compile"))
+      assert.is_nil(managed.parse_line(":artifact::1.0"))
+    end)
+
+    it("builds a coordinate-to-version map from full output", function()
+      local stdout = table.concat({
+        "[INFO] The following files have been resolved:",
+        "[INFO]    org.springframework.boot:spring-boot-starter-web:jar:3.5.3:compile",
+        "[INFO]    org.springframework.boot:spring-boot-autoconfigure:jar:3.5.3:compile"
+          .. " -- module spring-boot-autoconfigure [auto]",
+        "[INFO]    com.example:custom:jar:1.0:runtime",
+        "",
+        "[INFO] ------------------------------------------------------------------------",
+        "[INFO] BUILD SUCCESS",
+      }, "\n")
+      local resolved = managed.parse_output(stdout)
+      assert.equals("3.5.3", resolved["org.springframework.boot:spring-boot-starter-web"])
+      assert.equals("3.5.3", resolved["org.springframework.boot:spring-boot-autoconfigure"])
+      assert.equals("1.0", resolved["com.example:custom"])
+    end)
+
+    it("returns an empty map for nil or non-string stdout", function()
+      local result = managed.parse_output(nil)
+      assert.is_table(result)
+      assert.equals(0, vim.tbl_count(result))
+      result = managed.parse_output(123)
+      assert.is_table(result)
+      assert.equals(0, vim.tbl_count(result))
+    end)
+  end)
 end)

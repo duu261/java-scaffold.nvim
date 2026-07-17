@@ -559,8 +559,16 @@ function M.remove(opts, callback)
   end)
 end
 
-local function outdated_result(path, dependencies, managed, property_backed, unchecked, warning)
-  return {
+local function outdated_result(
+  path,
+  dependencies,
+  managed,
+  property_backed,
+  unchecked,
+  warning,
+  managing_parent
+)
+  local result = {
     ok = true,
     pom_path = path,
     dependencies = dependencies,
@@ -568,6 +576,10 @@ local function outdated_result(path, dependencies, managed, property_backed, unc
     unchecked = unchecked,
     warning = warning,
   }
+  if managing_parent then
+    result.managing_parent = managing_parent
+  end
+  return result
 end
 
 function M.outdated(opts, callback)
@@ -622,84 +634,156 @@ function M.outdated(opts, callback)
     end
 
     local candidates = {}
-    local managed = 0
+    local managed_deps = {}
     local property_backed = 0
     for _, dependency in ipairs(dependencies) do
       if not dependency.version then
-        managed = managed + 1
+        managed_deps[#managed_deps + 1] = dependency
       elseif dependency.version:find("${", 1, true) then
         property_backed = property_backed + 1
       else
         candidates[#candidates + 1] = dependency
       end
     end
-    if #candidates == 0 then
-      complete(outdated_result(path, {}, managed, property_backed, 0, nil))
-      return
+
+    local managing_parent_name = nil
+    if #managed_deps > 0 then
+      local parent = require("duke.pom").parent(lines)
+      if parent then
+        managing_parent_name = parent.artifact_id
+      end
     end
 
-    local rows = {}
-    local checked = 0
-    local index = 1
-    local function inspect_next()
-      if index > #candidates then
-        complete(outdated_result(path, rows, managed, property_backed, 0, nil))
+    local function start_inspect(managed_skipped, managed_notice)
+      if #candidates == 0 then
+        complete(
+          outdated_result(
+            path,
+            {},
+            managed_skipped,
+            property_backed,
+            0,
+            managed_notice,
+            managing_parent_name
+          )
+        )
         return
       end
-      local dependency = candidates[index]
-      local started, lookup_start_error = pcall(
-        require("duke.maven_central").versions,
-        dependency.group_id,
-        dependency.artifact_id,
-        function(lookup_error, versions)
-          local callback_ok, callback_error = pcall(function()
-            if lookup_error then
-              local unchecked = #candidates - index + 1
-              if checked == 0 then
-                fail(complete, { pom_path = path }, lookup_error)
-              else
-                complete(
-                  outdated_result(path, rows, managed, property_backed, unchecked, lookup_error)
-                )
-              end
-              return
-            end
-            checked = checked + 1
-            local latest = versions and versions[1]
-            if latest and latest ~= dependency.version then
-              rows[#rows + 1] = {
-                group_id = dependency.group_id,
-                artifact_id = dependency.artifact_id,
-                current_version = dependency.version,
-                latest_version = latest,
-              }
-            end
-            index = index + 1
-            inspect_next()
-          end)
-          if not callback_ok then
-            fail(complete, { pom_path = path }, callback_error)
-          end
-        end
-      )
-      if not started then
-        if checked == 0 then
-          fail(complete, { pom_path = path }, lookup_start_error)
-        else
+
+      local rows = {}
+      local checked = 0
+      local index = 1
+      local function inspect_next()
+        if index > #candidates then
           complete(
             outdated_result(
               path,
               rows,
-              managed,
+              managed_skipped,
               property_backed,
-              #candidates - index + 1,
-              tostring(lookup_start_error)
+              0,
+              managed_notice,
+              managing_parent_name
             )
           )
+          return
+        end
+        local dependency = candidates[index]
+        local started, lookup_start_error = pcall(
+          require("duke.maven_central").versions,
+          dependency.group_id,
+          dependency.artifact_id,
+          function(lookup_error, versions)
+            local callback_ok, callback_error = pcall(function()
+              if lookup_error then
+                local unchecked = #candidates - index + 1
+                if checked == 0 then
+                  fail(complete, { pom_path = path }, lookup_error)
+                else
+                  complete(
+                    outdated_result(
+                      path,
+                      rows,
+                      managed_skipped,
+                      property_backed,
+                      unchecked,
+                      lookup_error,
+                      managing_parent_name
+                    )
+                  )
+                end
+                return
+              end
+              checked = checked + 1
+              local latest = versions and versions[1]
+              if latest and latest ~= dependency.version then
+                local row = {
+                  group_id = dependency.group_id,
+                  artifact_id = dependency.artifact_id,
+                  current_version = dependency.version,
+                  latest_version = latest,
+                }
+                if dependency.managed then
+                  row.managed = true
+                  row.managing_parent = managing_parent_name
+                end
+                rows[#rows + 1] = row
+              end
+              index = index + 1
+              inspect_next()
+            end)
+            if not callback_ok then
+              fail(complete, { pom_path = path }, callback_error)
+            end
+          end
+        )
+        if not started then
+          if checked == 0 then
+            fail(complete, { pom_path = path }, lookup_start_error)
+          else
+            complete(
+              outdated_result(
+                path,
+                rows,
+                managed_skipped,
+                property_backed,
+                #candidates - index + 1,
+                tostring(lookup_start_error),
+                managing_parent_name
+              )
+            )
+          end
         end
       end
+      inspect_next()
     end
-    inspect_next()
+
+    if #managed_deps > 0 then
+      require("duke.managed").resolve(path, managed_deps, function(mvn_error, resolved)
+        if mvn_error then
+          start_inspect(#managed_deps, mvn_error)
+        else
+          local unresolved = 0
+          for _, dep in ipairs(managed_deps) do
+            local key = dep.group_id .. ":" .. dep.artifact_id
+            local resolved_version = resolved[key]
+            if resolved_version then
+              candidates[#candidates + 1] = {
+                group_id = dep.group_id,
+                artifact_id = dep.artifact_id,
+                version = resolved_version,
+                managed = true,
+              }
+            else
+              unresolved = unresolved + 1
+            end
+          end
+          start_inspect(unresolved, nil)
+        end
+      end)
+    else
+      start_inspect(0, nil)
+    end
   end)
   if not ok then
     fail(complete, nil, startup_error)

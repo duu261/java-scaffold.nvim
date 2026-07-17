@@ -55,6 +55,7 @@ describe("programmatic API", function()
       "duke.gradle",
       "duke.java",
       "duke.log",
+      "duke.managed",
       "duke.maven",
       "duke.maven_central",
       "duke.maven_module",
@@ -654,13 +655,18 @@ describe("programmatic API", function()
         end)
       end,
     }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, _, callback)
+        callback("mvn unavailable")
+      end,
+    }
     local result = wait_result(function(callback)
       require("duke").outdated({ pom_path = path }, callback)
     end)
     assert.same({ "old", "current" }, order)
     assert.same({ managed = 1, property_backed = 1 }, result.skipped)
     assert.equals(0, result.unchecked)
-    assert.is_nil(result.warning)
+    assert.equals("mvn unavailable", result.warning)
     assert.same(
       { { group_id = "g", artifact_id = "old", current_version = "1", latest_version = "3" } },
       result.dependencies
@@ -738,6 +744,165 @@ describe("programmatic API", function()
     end)
     assert.is_false(result.ok)
     assert.equals(0, calls)
+  end)
+
+  it("includes managed dependencies with resolved versions in outdated results", function()
+    local blocks = {
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>old</artifactId>",
+      "      <version>1</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>managed</artifactId>",
+      "    </dependency>",
+    }
+    local path = pom(base_pom(blocks))
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, artifact, callback)
+        vim.schedule(function()
+          callback(nil, artifact == "old" and { "3", "1" } or { "4" })
+        end)
+      end,
+    }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, deps, callback)
+        assert.equals(1, #deps)
+        assert.equals("g", deps[1].group_id)
+        assert.equals("managed", deps[1].artifact_id)
+        callback(nil, { ["g:managed"] = "2" })
+      end,
+    }
+    local result = wait_result(function(callback)
+      require("duke").outdated({ pom_path = path }, callback)
+    end)
+    assert.equals(0, result.skipped.managed)
+    assert.equals(0, result.skipped.property_backed)
+    assert.equals(0, result.unchecked)
+    assert.is_nil(result.warning)
+    assert.equals(2, #result.dependencies)
+    -- Explicit dep row.
+    local explicit = result.dependencies[1]
+    assert.equals("g", explicit.group_id)
+    assert.equals("old", explicit.artifact_id)
+    assert.equals("1", explicit.current_version)
+    assert.equals("3", explicit.latest_version)
+    assert.is_nil(explicit.managed)
+    -- Managed dep row.
+    local managed_row = result.dependencies[2]
+    assert.equals("g", managed_row.group_id)
+    assert.equals("managed", managed_row.artifact_id)
+    assert.equals("2", managed_row.current_version)
+    assert.equals("4", managed_row.latest_version)
+    assert.is_true(managed_row.managed)
+    assert.is_nil(managed_row.managing_parent)
+  end)
+
+  it("surfaces the managing parent name in managed outdated rows", function()
+    local lines = {
+      "<project>",
+      "  <parent>",
+      "    <groupId>org.springframework.boot</groupId>",
+      "    <artifactId>spring-boot-starter-parent</artifactId>",
+      "    <version>3.5.3</version>",
+      "  </parent>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>app</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local path = pom(lines)
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, _, callback)
+        vim.schedule(function()
+          callback(nil, { "2" })
+        end)
+      end,
+    }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, _, callback)
+        callback(nil, { ["com.example:app"] = "1" })
+      end,
+    }
+    local result = wait_result(function(callback)
+      require("duke").outdated({ pom_path = path }, callback)
+    end)
+    assert.equals(1, #result.dependencies)
+    assert.is_true(result.dependencies[1].managed)
+    assert.equals("spring-boot-starter-parent", result.dependencies[1].managing_parent)
+    assert.equals("spring-boot-starter-parent", result.managing_parent)
+  end)
+
+  it("degrades managed resolution when mvn fails without breaking explicit rows", function()
+    local blocks = {
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>explicit</artifactId>",
+      "      <version>1</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>managed</artifactId>",
+      "    </dependency>",
+    }
+    local path = pom(base_pom(blocks))
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, _, callback)
+        vim.schedule(function()
+          callback(nil, { "2" })
+        end)
+      end,
+    }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, _, callback)
+        callback("mvn not found")
+      end,
+    }
+    local result = wait_result(function(callback)
+      require("duke").outdated({ pom_path = path }, callback)
+    end)
+    assert.is_true(result.ok)
+    assert.equals(1, result.skipped.managed)
+    assert.equals("mvn not found", result.warning)
+    assert.equals(1, #result.dependencies)
+    assert.equals("explicit", result.dependencies[1].artifact_id)
+  end)
+
+  it("excludes transitive artifacts by intersecting with declared root deps", function()
+    local blocks = {
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>declared</artifactId>",
+      "    </dependency>",
+    }
+    local path = pom(base_pom(blocks))
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, _, callback)
+        vim.schedule(function()
+          callback(nil, { "2" })
+        end)
+      end,
+    }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, deps, callback)
+        assert.equals(1, #deps)
+        -- Return both declared and transitive: only declared should surface.
+        callback(nil, {
+          ["g:declared"] = "1",
+          ["g:transitive"] = "5",
+        })
+      end,
+    }
+    local result = wait_result(function(callback)
+      require("duke").outdated({ pom_path = path }, callback)
+    end)
+    assert.equals(0, result.skipped.managed)
+    assert.equals(1, #result.dependencies)
+    assert.equals("declared", result.dependencies[1].artifact_id)
   end)
 
   it("rejects add_module with a missing reactor_dir instead of a cwd fallback", function()

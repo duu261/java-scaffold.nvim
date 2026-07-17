@@ -668,37 +668,104 @@ function M.update_dependency()
     return
   end
 
-  local choices = {}
-  local hidden = 0
+  local explicit = {}
+  local managed_deps = {}
   for _, dependency in ipairs(dependencies) do
     if dependency.version then
-      choices[#choices + 1] = dependency
+      explicit[#explicit + 1] = dependency
     else
-      hidden = hidden + 1
+      managed_deps[#managed_deps + 1] = dependency
     end
-  end
-  if hidden > 0 then
-    local noun = hidden == 1 and "dependency" or "dependencies"
-    notify(
-      string.format("%d managed %s hidden because no explicit version is present", hidden, noun)
-    )
-  end
-  if #choices == 0 then
-    notify("no root dependencies with explicit versions found")
-    return
   end
 
-  require("duke.picker").select_one(choices, {
-    prompt = "Update Maven dependency",
-    format_item = function(dependency)
-      return string.format("%s  %s", dependency_label(dependency), dependency.version)
-    end,
-  }, function(selected)
-    if not selected then
+  local managing_parent_name = nil
+  if #managed_deps > 0 then
+    local parent = require("duke.pom").parent(lines)
+    if parent then
+      managing_parent_name = parent.artifact_id
+    end
+  end
+
+  local function show_picker(managed_notice)
+    if managed_notice then
+      notify(managed_notice, vim.log.levels.WARN)
+    end
+    local choices = {}
+    for _, dep in ipairs(explicit) do
+      choices[#choices + 1] = dep
+    end
+    for _, dep in ipairs(managed_deps) do
+      if dep.version then
+        choices[#choices + 1] = dep
+      end
+    end
+    if #choices == 0 then
+      notify("no root dependencies found")
       return
     end
-    upgrade_dependency(pom_path, selected)
-  end)
+
+    require("duke.picker").select_one(choices, {
+      prompt = "Update Maven dependency",
+      format_item = function(dependency)
+        local label = dependency_label(dependency)
+        if dependency.version then
+          local suffix = ""
+          if dependency.managed then
+            suffix = "  (managed by " .. managing_parent_name .. ")"
+          end
+          return string.format("%s  %s%s", label, dependency.version, suffix)
+        end
+        return label
+      end,
+    }, function(selected)
+      if not selected then
+        return
+      end
+      if selected.managed then
+        notify(
+          string.format(
+            "%s version is managed by %s; use :DukeBootUpgrade to upgrade the parent",
+            dependency_label(selected),
+            managing_parent_name or "parent POM"
+          )
+        )
+        return
+      end
+      if not selected.version then
+        notify_error(
+          "cannot upgrade " .. dependency_label(selected) .. " without an explicit version"
+        )
+        return
+      end
+      upgrade_dependency(pom_path, selected)
+    end)
+  end
+
+  if #managed_deps > 0 then
+    require("duke.managed").resolve(pom_path, managed_deps, function(mvn_error, resolved)
+      if mvn_error then
+        local noun = #managed_deps == 1 and "dependency" or "dependencies"
+        notify(
+          string.format(
+            "%d managed %s hidden because mvn dependency:list failed",
+            #managed_deps,
+            noun
+          ),
+          vim.log.levels.WARN
+        )
+        show_picker(nil)
+        return
+      end
+      for _, dep in ipairs(managed_deps) do
+        local key = dep.group_id .. ":" .. dep.artifact_id
+        dep.version = resolved[key]
+        dep.managed = true
+      end
+      show_picker(nil)
+    end)
+  else
+    show_picker(nil)
+  end
 end
 
 function M.upgrade_boot_parent()
@@ -824,33 +891,30 @@ function M.outdated_dependencies()
   end
 
   local candidates = {}
-  local managed = 0
+  local managed_deps = {}
   local property_backed = 0
   for _, dependency in ipairs(dependencies) do
     if not dependency.version then
-      managed = managed + 1
+      managed_deps[#managed_deps + 1] = dependency
     elseif dependency.version:find("${", 1, true) then
       property_backed = property_backed + 1
     else
       candidates[#candidates + 1] = dependency
     end
   end
-  local skipped = managed + property_backed
-  if #candidates == 0 then
-    if skipped > 0 then
-      notify(skipped_outdated_notice(managed, property_backed) .. "; no dependencies to check")
-    else
-      notify("no root dependencies with literal explicit versions found")
+
+  local managing_parent_name = nil
+  if #managed_deps > 0 then
+    local parent = require("duke.pom").parent(lines)
+    if parent then
+      managing_parent_name = parent.artifact_id
     end
-    return
-  end
-  if skipped > 0 then
-    notify(skipped_outdated_notice(managed, property_backed))
   end
 
   local outdated = {}
   local checked = 0
   local index = 1
+
   local function present(unchecked, lookup_error)
     if unchecked > 0 then
       local noun = unchecked == 1 and "dependency" or "dependencies"
@@ -873,15 +937,29 @@ function M.outdated_dependencies()
     require("duke.picker").select_one(outdated, {
       prompt = "Outdated Maven dependencies",
       format_item = function(item)
-        return string.format(
+        local label = string.format(
           "%s  %s -> %s",
           dependency_label(item.dependency),
           item.dependency.version,
           item.latest
         )
+        if item.dependency.managed then
+          label = label .. "  (managed by " .. (managing_parent_name or "parent") .. ")"
+        end
+        return label
       end,
     }, function(selected)
       if selected then
+        if selected.dependency.managed then
+          notify(
+            string.format(
+              "%s version is managed by %s; use :DukeBootUpgrade to upgrade the parent",
+              dependency_label(selected.dependency),
+              managing_parent_name or "parent POM"
+            )
+          )
+          return
+        end
         upgrade_dependency(pom_path, selected.dependency, selected.versions)
       end
     end)
@@ -915,7 +993,51 @@ function M.outdated_dependencies()
       end
     )
   end
-  inspect_next()
+
+  local function start_inspect(managed_skipped, managed_notice)
+    if managed_notice then
+      notify(managed_notice, vim.log.levels.WARN)
+    end
+    local skipped = managed_skipped + property_backed
+    if #candidates == 0 then
+      if skipped > 0 then
+        notify(
+          skipped_outdated_notice(managed_skipped, property_backed) .. "; no dependencies to check"
+        )
+      else
+        notify("no root dependencies with literal explicit versions found")
+      end
+      return
+    end
+    if skipped > 0 then
+      notify(skipped_outdated_notice(managed_skipped, property_backed))
+    end
+    inspect_next()
+  end
+
+  if #managed_deps > 0 then
+    require("duke.managed").resolve(pom_path, managed_deps, function(mvn_error, resolved)
+      if mvn_error then
+        start_inspect(#managed_deps, mvn_error)
+      else
+        local unresolved = 0
+        for _, dep in ipairs(managed_deps) do
+          local key = dep.group_id .. ":" .. dep.artifact_id
+          local resolved_version = resolved[key]
+          if resolved_version then
+            dep.version = resolved_version
+            dep.managed = true
+            candidates[#candidates + 1] = dep
+          else
+            unresolved = unresolved + 1
+          end
+        end
+        start_inspect(unresolved, nil)
+      end
+    end)
+  else
+    start_inspect(0, nil)
+  end
 end
 
 function M.remove_dependency()

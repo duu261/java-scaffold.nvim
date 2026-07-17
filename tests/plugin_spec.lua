@@ -18,6 +18,7 @@ describe("plugin surface", function()
     package.loaded["duke.gradle"] = nil
     package.loaded["duke.java"] = nil
     package.loaded["duke.log"] = nil
+    package.loaded["duke.managed"] = nil
     package.loaded["duke.maven"] = nil
     package.loaded["duke.maven_central"] = nil
     package.loaded["duke.maven_module"] = nil
@@ -573,6 +574,11 @@ describe("plugin surface", function()
         callback(nil, { "5.13.4", "5.12.0" })
       end,
     }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, _, callback)
+        callback("mvn unavailable")
+      end,
+    }
     package.loaded["duke.picker"] = {
       select_one = function(items, opts, callback)
         if opts.prompt == "Update Maven dependency" then
@@ -767,6 +773,11 @@ describe("plugin surface", function()
         end
       end,
     }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, _, callback)
+        callback("mvn unavailable")
+      end,
+    }
     package.loaded["duke.picker"] = {
       select_one = function(items, opts, callback)
         if opts.prompt == "Outdated Maven dependencies" then
@@ -865,6 +876,11 @@ describe("plugin surface", function()
         error("managed dependency must not be looked up")
       end,
     }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, _, callback)
+        callback("mvn unavailable")
+      end,
+    }
     package.loaded["duke.picker"] = {
       select_one = function()
         error("managed-only result must not open a picker")
@@ -873,8 +889,8 @@ describe("plugin surface", function()
 
     require("duke").outdated_dependencies()
 
-    assert.equals(1, #notices)
-    assert.is_truthy(notices[1]:find("1 managed dependency skipped", 1, true))
+    assert.equals(2, #notices)
+    assert.is_truthy(notices[2]:find("1 managed dependency skipped", 1, true))
     assert.same(managed, vim.fn.readfile(pom_path))
 
     local current = {
@@ -901,6 +917,157 @@ describe("plugin surface", function()
     assert.equals(1, #notices)
     assert.is_truthy(notices[1]:find("1 dependencies checked, all up to date", 1, true))
     assert.same(current, vim.fn.readfile(pom_path))
+  end)
+
+  it(
+    "shows managed dependencies in the outdated view with resolved version and managing parent",
+    function()
+      local original = {
+        "<project>",
+        "  <parent>",
+        "    <groupId>org.springframework.boot</groupId>",
+        "    <artifactId>spring-boot-starter-parent</artifactId>",
+        "    <version>3.5.3</version>",
+        "  </parent>",
+        "  <dependencies>",
+        "    <dependency>",
+        "      <groupId>org.springframework.boot</groupId>",
+        "      <artifactId>spring-boot-starter-web</artifactId>",
+        "    </dependency>",
+        "  </dependencies>",
+        "</project>",
+      }
+      local pom_path = open_pom(original)
+      local notices = {}
+      vim.notify = function(message)
+        notices[#notices + 1] = message
+      end
+      package.loaded["duke.maven_central"] = {
+        versions = function(_, _, callback)
+          callback(nil, { "3.6.0" })
+        end,
+      }
+      package.loaded["duke.managed"] = {
+        resolve = function(_, deps, callback)
+          assert.equals(1, #deps)
+          callback(nil, { ["org.springframework.boot:spring-boot-starter-web"] = "3.5.3" })
+        end,
+      }
+      local picker_items
+      package.loaded["duke.picker"] = {
+        select_one = function(items, opts, callback)
+          picker_items = items
+          assert.equals("Outdated Maven dependencies", opts.prompt)
+          callback(nil) -- Cancel, no upgrade.
+        end,
+      }
+
+      require("duke").outdated_dependencies()
+
+      assert.equals(1, #picker_items)
+      local item = picker_items[1]
+      assert.equals("org.springframework.boot", item.dependency.group_id)
+      assert.equals("spring-boot-starter-web", item.dependency.artifact_id)
+      assert.equals("3.5.3", item.dependency.version)
+      assert.equals("3.6.0", item.latest)
+      assert.is_true(item.dependency.managed)
+      assert.same(original, vim.fn.readfile(pom_path))
+    end
+  )
+
+  it("selecting a managed outdated row notifies and writes nothing", function()
+    local original = {
+      "<project>",
+      "  <parent>",
+      "    <groupId>org.springframework.boot</groupId>",
+      "    <artifactId>spring-boot-starter-parent</artifactId>",
+      "    <version>3.5.3</version>",
+      "  </parent>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>org.springframework.boot</groupId>",
+      "      <artifactId>spring-boot-starter-web</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local pom_path = open_pom(original)
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, _, callback)
+        callback(nil, { "3.6.0" })
+      end,
+    }
+    package.loaded["duke.managed"] = {
+      resolve = function(_, _, callback)
+        callback(nil, { ["org.springframework.boot:spring-boot-starter-web"] = "3.5.3" })
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      select_one = function(items, _, callback)
+        callback(items[1]) -- Select the managed dep.
+      end,
+    }
+
+    require("duke").outdated_dependencies()
+
+    assert.same(original, vim.fn.readfile(pom_path))
+    local combined = table.concat(notices, "\n")
+    assert.is_truthy(combined:find(":DukeBootUpgrade", 1, true))
+  end)
+
+  it("shows managed dependencies as unselectable rows in :DukeUpgrade", function()
+    local original = {
+      "<project>",
+      "  <parent>",
+      "    <groupId>org.springframework.boot</groupId>",
+      "    <artifactId>spring-boot-starter-parent</artifactId>",
+      "    <version>3.5.3</version>",
+      "  </parent>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>org.springframework.boot</groupId>",
+      "      <artifactId>spring-boot-starter-web</artifactId>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local pom_path = open_pom(original)
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["duke.managed"] = {
+      resolve = function(_, _, callback)
+        callback(nil, { ["org.springframework.boot:spring-boot-starter-web"] = "3.5.3" })
+      end,
+    }
+    local picker_items, format_fn
+    package.loaded["duke.picker"] = {
+      select_one = function(items, opts, callback)
+        picker_items = items
+        format_fn = opts.format_item
+        local managed_item = items[1]
+        callback(managed_item) -- Select the managed dep.
+      end,
+    }
+
+    require("duke").update_dependency()
+
+    assert.equals(1, #picker_items)
+    assert.is_true(picker_items[1].managed)
+    assert.equals("3.5.3", picker_items[1].version)
+    -- Format shows managed marker (may or may not include parent name depending on POM parsing).
+    local formatted = format_fn(picker_items[1])
+    assert.is_truthy(formatted:find("managed by", 1, true))
+    -- POM unchanged.
+    assert.same(original, vim.fn.readfile(pom_path))
+    -- Notice names :DukeBootUpgrade.
+    local combined = table.concat(notices, "\n")
+    assert.is_truthy(combined:find(":DukeBootUpgrade", 1, true))
   end)
 
   it("marks installed Maven Central results from a fresh pom read", function()
