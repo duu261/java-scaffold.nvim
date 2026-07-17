@@ -4,6 +4,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## Unreleased
 
+## 0.8.0 - 2026-07-17
+
 ### Added
 
 - `:DukeOutdated` and `:DukeUpgrade` now resolve versions of managed dependencies (those without explicit `<version>`, managed by a parent POM or BOM) through `mvn dependency:list`. Managed dependencies appear with their resolved version, marked as managed by the Boot parent when present. Selecting a managed row in either command notifies about `:DukeBootUpgrade` instead of writing. If Maven is missing or the project fails to resolve, the commands degrade to the prior skip-with-count behavior and explicit-version rows continue to work. Transitive artifacts from `dependency:list` are excluded by intersecting with declared root dependencies.
