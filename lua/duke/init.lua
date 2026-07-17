@@ -351,6 +351,9 @@ local function insert_maven_dependencies(pom_path, selected)
       notify_error("invalid Maven Central coordinate: " .. coordinate_error)
       return
     end
+    dependency.preview = nil
+    dependency.description = nil
+    dependency.timestamp = nil
   end
   local latest_lines, buffer, was_modified = read_pom(pom_path)
   if not latest_lines then
@@ -375,49 +378,71 @@ local function insert_maven_dependencies(pom_path, selected)
   notify(string.format("added %d dependencies%s", added, suffix))
 end
 
+local function fetch_versions_display(group_id, artifact_id, callback)
+  local maven = require("duke.maven_central")
+  if maven.versions_display then
+    maven.versions_display(group_id, artifact_id, callback)
+  else
+    maven.versions(group_id, artifact_id, function(err, versions)
+      if err then
+        callback(err)
+        return
+      end
+      local items = {}
+      for _, v in ipairs(versions) do
+        items[#items + 1] = { value = v, name = v }
+      end
+      callback(nil, items)
+    end)
+  end
+end
+
 local function choose_maven_versions(pom_path, selected)
   if #selected ~= 1 then
     insert_maven_dependencies(pom_path, selected)
     return
   end
   local dependency = selected[1]
-  require("duke.maven_central").versions(
-    dependency.group_id,
-    dependency.artifact_id,
-    function(err, versions)
-      if err then
-        notify_error(err)
+  fetch_versions_display(dependency.group_id, dependency.artifact_id, function(err, versions)
+    if err then
+      notify_error(err)
+      return
+    end
+    if #versions == 0 then
+      versions = { { name = dependency.version, value = dependency.version } }
+    elseif
+      not vim.tbl_contains(
+        vim.tbl_map(function(v)
+          return v.value
+        end, versions),
+        dependency.version
+      )
+    then
+      table.insert(versions, 1, { name = dependency.version, value = dependency.version })
+    end
+    require("duke.picker").select_one(versions, {
+      prompt = "Maven Central version",
+      default = dependency.version,
+    }, function(item)
+      if not item then
         return
       end
-      if #versions == 0 then
-        versions = { dependency.version }
-      elseif not vim.tbl_contains(versions, dependency.version) then
-        table.insert(versions, 1, dependency.version)
-      end
-      require("duke.picker").select_one(versions, {
-        prompt = "Maven Central version",
-        default = dependency.version,
-      }, function(version)
-        if not version then
+      local chosen = vim.deepcopy(dependency)
+      chosen.version = item.value or item
+      require("duke.picker").select_one({ "compile", "test", "provided", "runtime" }, {
+        prompt = "Maven dependency scope",
+        default = "compile",
+      }, function(scope)
+        if not scope then
           return
         end
-        local chosen = vim.deepcopy(dependency)
-        chosen.version = version
-        require("duke.picker").select_one({ "compile", "test", "provided", "runtime" }, {
-          prompt = "Maven dependency scope",
-          default = "compile",
-        }, function(scope)
-          if not scope then
-            return
-          end
-          if scope ~= "compile" then
-            chosen.scope = scope
-          end
-          insert_maven_dependencies(pom_path, { chosen })
-        end)
+        if scope ~= "compile" then
+          chosen.scope = scope
+        end
+        insert_maven_dependencies(pom_path, { chosen })
       end)
-    end
-  )
+    end)
+  end)
 end
 
 function M.add_dependency()
@@ -461,6 +486,24 @@ function M.add_dependency()
         if list_error then
           notify_error(list_error)
           return
+        end
+        for _, item in ipairs(choices) do
+          item.preview = function(_, _, bufnr)
+            local desc = item.description or "no description available"
+            local date = ""
+            if item.timestamp and item.timestamp > 0 then
+              date = os.date("  (%Y-%m-%d)", math.floor(item.timestamp / 1000))
+            end
+            local preview_lines = {
+              item.group_id .. ":" .. item.artifact_id .. date,
+              "Latest: " .. (item.version or "unknown"),
+              "",
+            }
+            for _, line in ipairs(vim.split(desc, "\n")) do
+              preview_lines[#preview_lines + 1] = line
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, preview_lines)
+          end
         end
         require("duke.picker").select_many(choices, {
           prompt = "Add Maven Central dependencies",
@@ -517,6 +560,16 @@ function M.add_dependency()
       for _, item in ipairs(metadata.flatten_dependencies(client)) do
         local coordinate = catalog.dependencies and catalog.dependencies[item.id]
         if metadata.is_direct(coordinate) then
+          item.preview = function(_, _, bufnr)
+            local preview_lines = { item.name .. "  [" .. (item.group or "?") .. "]" }
+            if item.description then
+              preview_lines[#preview_lines + 1] = ""
+              for _, line in ipairs(vim.split(item.description, "\n")) do
+                preview_lines[#preview_lines + 1] = line
+              end
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, preview_lines)
+          end
           choices[#choices + 1] = item
         end
       end
@@ -579,24 +632,37 @@ local function same_dependency(left, right)
 end
 
 local function select_dependency_upgrade(pom_path, selected, available_versions)
-  local versions = vim.deepcopy(available_versions)
+  local versions = {}
+  local seen = {}
+  for _, v in ipairs(available_versions) do
+    local value = type(v) == "table" and v.value or v
+    local name = type(v) == "table" and v.name or v
+    if not seen[value] then
+      seen[value] = true
+      versions[#versions + 1] = { value = value, name = name }
+    end
+  end
   if #versions == 0 then
     notify("no Maven Central versions found for " .. dependency_label(selected))
     return
   end
-  if not vim.tbl_contains(versions, selected.version) then
-    versions[#versions + 1] = selected.version
+  if not seen[selected.version] then
+    versions[#versions + 1] = {
+      value = selected.version,
+      name = selected.version .. "  (current)",
+    }
   end
   require("duke.picker").select_one(versions, {
     prompt = "Maven Central version",
-    default = versions[1],
+    default = versions[1].value,
     format_item = function(version)
-      return version == selected.version and (version .. "  (current)") or version
+      return version.value == versions[1].value and (version.name .. "  (latest)") or version.name
     end,
-  }, function(version)
-    if not version then
+  }, function(item)
+    if not item then
       return
     end
+    local version = type(item) == "table" and (item.value or item) or item
     if version == selected.version then
       notify(dependency_label(selected) .. " already uses version " .. version)
       return
@@ -638,17 +704,13 @@ local function upgrade_dependency(pom_path, selected, available_versions)
     select_dependency_upgrade(pom_path, selected, available_versions)
     return
   end
-  require("duke.maven_central").versions(
-    selected.group_id,
-    selected.artifact_id,
-    function(version_error, versions)
-      if version_error then
-        notify_error(version_error)
-        return
-      end
-      select_dependency_upgrade(pom_path, selected, versions)
+  fetch_versions_display(selected.group_id, selected.artifact_id, function(version_error, versions)
+    if version_error then
+      notify_error(version_error)
+      return
     end
-  )
+    select_dependency_upgrade(pom_path, selected, versions)
+  end)
 end
 
 function M.update_dependency()
@@ -779,14 +841,59 @@ function M.upgrade_boot_parent()
     notify_error("cannot read " .. pom_path)
     return
   end
-  local parent, parent_error = require("duke.pom").parent(lines)
-  if not parent then
-    notify_error(parent_error)
+  local function raw_version_contains_property(pom_lines)
+    local xml = table.concat(pom_lines, "\n")
+    local parent = xml:match("<parent[^>]*>(.-)</parent>")
+    if parent then
+      local v = parent:match("<version>([^<]*)</version>")
+      if v and v:find("${", 1, true) then
+        return v
+      end
+    end
+    local management = xml:match("<dependencyManagement%s*[^>]*>(.-)</dependencyManagement%s*>")
+    if management then
+      for dep in management:gmatch("<dependency%s*[^>]*>(.-)</dependency%s*>") do
+        local g = dep:match("<groupId>([^<]*)</groupId>")
+        local a = dep:match("<artifactId>([^<]*)</artifactId>")
+        if g == "org.springframework.boot" and a == "spring-boot-dependencies" then
+          local v = dep:match("<version>([^<]*)</version>")
+          if v and v:find("${", 1, true) then
+            return v
+          end
+        end
+      end
+    end
+  end
+
+  local property_version = raw_version_contains_property(lines)
+  if property_version then
+    local property = property_version:match("^%${([%w_.-]+)}$")
+    if property then
+      notify_error("cannot update Boot version property " .. property)
+    else
+      notify_error("cannot update Boot version containing property " .. property_version)
+    end
     return
   end
-  local property = parent.version and parent.version:match("^%${([%w_.-]+)}$")
-  if property then
-    notify_error("cannot update parent version property " .. property)
+
+  local boot_version = require("duke.pom").spring_boot_version(lines)
+  if not boot_version then
+    notify_error("no Spring Boot version found in parent or dependencyManagement")
+    return
+  end
+  local parent, _ = require("duke.pom").parent(lines)
+  local is_parent = parent
+    and parent.group_id == "org.springframework.boot"
+    and parent.artifact_id == "spring-boot-starter-parent"
+
+  if not is_parent then
+    notify(
+      string.format(
+        "Spring Boot %s managed by spring-boot-dependencies in dependencyManagement;"
+          .. " upgrading the BOM version is not yet supported",
+        boot_version
+      )
+    )
     return
   end
 
@@ -1104,6 +1211,74 @@ function M.remove_dependency()
     local saved = save_pom(pom_path, updated, buffer, was_modified)
     local suffix = saved and "" or " (buffer left unsaved)"
     notify(string.format("removed %d dependencies%s", removed, suffix))
+  end)
+end
+
+local function render_scratch(lines, title)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype = "duke-info"
+  local width = vim.o.columns - 2
+  local height = math.min(#lines, vim.o.lines - 4)
+  vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = 1,
+    col = 1,
+    style = "minimal",
+    border = "single",
+    title = title,
+    title_pos = "center",
+  })
+end
+
+local function show_coordinate_info(coord)
+  local parts = vim.split(coord, ":", { plain = true })
+  local group_id = parts[1]
+  local artifact_id = parts[2]
+  if not group_id or not artifact_id or group_id == "" or artifact_id == "" then
+    notify_error("invalid coordinate '" .. coord .. "'; use groupId:artifactId")
+    return
+  end
+  notify("looking up " .. coord)
+  fetch_versions_display(group_id, artifact_id, function(err, items)
+    if err then
+      notify_error(err)
+      return
+    end
+    local lines = {
+      "Coordinate: " .. group_id .. ":" .. artifact_id,
+      "Latest version: " .. (#items > 0 and items[1].name or "unknown"),
+      "",
+      "Recent versions:",
+    }
+    local count = math.min(#items, 15)
+    for i = 1, count do
+      lines[#lines + 1] = "  " .. items[i].name
+    end
+    if #items > count then
+      lines[#lines + 1] = "  … and " .. (#items - count) .. " more"
+    end
+    if #items == 0 then
+      lines[#lines + 1] = "  (none found)"
+    end
+    render_scratch(lines, "DukeInfo")
+  end)
+end
+
+function M.info(coordinate)
+  if coordinate then
+    show_coordinate_info(coordinate)
+    return
+  end
+  require("duke.picker").input("Maven coordinate (groupId:artifactId): ", "", function(input)
+    if not input or vim.trim(input) == "" then
+      return
+    end
+    show_coordinate_info(vim.trim(input))
   end)
 end
 

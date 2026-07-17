@@ -442,7 +442,10 @@ describe("plugin surface", function()
       end,
       select_one = function(items, opts, callback)
         if opts.prompt == "Maven Central version" then
-          assert.same({ "33.4.8-jre", "33.4.7-jre" }, items)
+          assert.same({
+            { name = "33.4.8-jre", value = "33.4.8-jre" },
+            { name = "33.4.7-jre", value = "33.4.7-jre" },
+          }, items)
           assert.equals("33.4.8-jre", opts.default)
           callback("33.4.7-jre")
           return
@@ -588,9 +591,12 @@ describe("plugin surface", function()
           return
         end
         assert.equals("Maven Central version", opts.prompt)
-        assert.same({ "5.13.4", "5.12.0" }, items)
+        assert.same({
+          { name = "5.13.4", value = "5.13.4" },
+          { name = "5.12.0", value = "5.12.0" },
+        }, items)
         assert.equals("5.13.4", opts.default)
-        assert.equals("5.12.0  (current)", opts.format_item("5.12.0"))
+        assert.equals("5.13.4  (latest)", opts.format_item({ name = "5.13.4", value = "5.13.4" }))
         callback("5.13.4")
       end,
     }
@@ -787,7 +793,10 @@ describe("plugin surface", function()
           return
         end
         assert.equals("Maven Central version", opts.prompt)
-        assert.same({ "4.13.2", "3.8.1" }, items)
+        assert.same({
+          { name = "4.13.2", value = "4.13.2" },
+          { name = "3.8.1", value = "3.8.1" },
+        }, items)
         assert.equals("4.13.2", opts.default)
         callback(nil)
       end,
@@ -2307,5 +2316,65 @@ describe("plugin surface", function()
     assert.same(before, vim.fn.readfile(property_pom))
     assert.equals(0, central_calls)
     assert.is_truthy(table.concat(notices, "\n"):find("boot.version", 1, true))
+  end)
+
+  it("shows coordinate info in a scratch buffer via :DukeInfo", function()
+    package.loaded["duke.pom_file"] = {
+      read = function()
+        return {
+          "<project>",
+          "  <artifactId>demo</artifactId>",
+          "</project>",
+        }
+      end,
+    }
+    package.loaded["duke.maven_central"] = {
+      versions_display = function(_, _, callback)
+        callback(nil, {
+          { name = "33.4.8-jre  (2026-07)", value = "33.4.8-jre" },
+          { name = "33.4.7-jre  (2026-06)", value = "33.4.7-jre" },
+        })
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      input = function(_, _, callback)
+        callback("com.google.guava:guava")
+      end,
+    }
+    local created_bufs = {}
+    local original_create = vim.api.nvim_create_buf
+    vim.api.nvim_create_buf = function(listed, scratch)
+      local buf = original_create(listed, scratch)
+      table.insert(created_bufs, buf)
+      return buf
+    end
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+
+    require("duke").info()
+
+    assert.equals(1, #notices)
+    assert.is_truthy(notices[1]:find("looking up", 1, true))
+    assert.equals(1, #created_bufs)
+    local lines = vim.api.nvim_buf_get_lines(created_bufs[1], 0, -1, false)
+    assert.is_truthy(lines[1]:find("com.google.guava:guava", 1, true))
+    assert.is_truthy(lines[2]:find("33.4.8-jre", 1, true))
+    vim.api.nvim_create_buf = original_create
+  end)
+
+  it("rejects invalid coordinates in :DukeInfo", function()
+    local notices = {}
+    vim.notify = function(message, level)
+      if level == vim.log.levels.ERROR then
+        notices[#notices + 1] = message
+      end
+    end
+
+    require("duke").info("bad-coordinate")
+
+    assert.equals(1, #notices)
+    assert.is_truthy(notices[1]:find("invalid coordinate", 1, true))
   end)
 end)

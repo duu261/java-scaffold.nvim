@@ -116,6 +116,8 @@ function M.search(term, callback, runner)
             artifact_id = doc.a,
             version = doc.latestVersion,
             packaging = doc.p,
+            description = type(doc.description) == "string" and doc.description or nil,
+            timestamp = tonumber(doc.timestamp),
           }
         end
       end
@@ -148,6 +150,45 @@ function M.versions(group_id, artifact_id, callback, runner)
         end
       end
       callback(nil, versions)
+    end,
+    runner
+  )
+end
+
+local function format_timestamp(ts)
+  if type(ts) ~= "number" or ts <= 0 then
+    return nil
+  end
+  return os.date("%Y-%m", math.floor(ts / 1000))
+end
+
+function M.versions_display(group_id, artifact_id, callback, runner)
+  local config = require("duke.config").get().maven
+  request(
+    M.build_versions_args(
+      config.central_search_url,
+      group_id,
+      artifact_id,
+      config.central_search_rows
+    ),
+    function(err, docs)
+      if err then
+        callback(err)
+        return
+      end
+      local items = {}
+      local seen = {}
+      for _, doc in ipairs(docs) do
+        if type(doc) == "table" and non_empty_string(doc.v) and not seen[doc.v] then
+          seen[doc.v] = true
+          local date = format_timestamp(doc.timestamp)
+          items[#items + 1] = {
+            value = doc.v,
+            name = date and string.format("%s  (%s)", doc.v, date) or doc.v,
+          }
+        end
+      end
+      callback(nil, items)
     end,
     runner
   )

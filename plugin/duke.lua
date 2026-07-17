@@ -58,3 +58,7 @@ vim.api.nvim_create_user_command("DukeHealth", function()
     vim.notify("duke.nvim: health check failed", vim.log.levels.ERROR)
   end
 end, { desc = "Check duke.nvim health", force = true })
+
+vim.api.nvim_create_user_command("DukeInfo", function(opts)
+  require("duke").info(opts.args ~= "" and opts.args or nil)
+end, { desc = "Show Maven Central metadata for a coordinate", nargs = "?", force = true })

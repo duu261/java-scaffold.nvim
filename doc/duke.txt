@@ -460,6 +460,12 @@ then choose [Done].
     dependencies container, sibling blocks, comments, and surrounding blank
     lines.
 
+                                               *:DukeInfo*
+:DukeInfo [groupId:artifactId]
+    Show latest and recent versions with release dates from Maven Central
+    in a read-only scratch buffer. Without an argument, prompt for a
+    coordinate. The buffer wipes on close.
+
                                                *:DukeClearCache*
 :DukeClearCache
     Delete all cached Initializr project metadata and dependency catalogs.

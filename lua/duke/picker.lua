@@ -69,7 +69,12 @@ function M.select_one(items, opts, callback)
         results = items,
         entry_maker = function(item)
           local text = display(item, opts.format_item)
-          return { value = item, display = text, ordinal = text }
+          return {
+            value = item,
+            display = text,
+            ordinal = text,
+            preview = item.preview,
+          }
         end,
       }),
       sorter = telescope.config.generic_sorter(picker_opts),

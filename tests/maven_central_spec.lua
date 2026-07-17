@@ -195,4 +195,54 @@ describe("Maven Central search", function()
 
     assert.same({ "33.4.8-jre", "33.4.7-jre" }, received)
   end)
+
+  it("returns timestamped display items in descending order", function()
+    local received
+    search.versions_display("com.google.guava", "guava", function(err, items)
+      assert.is_nil(err)
+      received = items
+    end, function(_, _, _, callback)
+      local ts = os.time() * 1000
+      callback({
+        code = 0,
+        stdout = vim.json.encode({
+          response = {
+            docs = {
+              { v = "33.4.8-jre", timestamp = ts },
+              { v = "33.4.7-jre", timestamp = ts - 60 * 86400000 },
+            },
+          },
+        }),
+        stderr = "",
+      })
+    end)
+
+    assert.equals(2, #received)
+    assert.equals("33.4.8-jre", received[1].value)
+    assert.matches("33.4.8%-jre.*%d%d%d%d%-%d%d", received[1].name)
+    assert.equals("33.4.7-jre", received[2].value)
+    assert.matches("33.4.7%-jre.*%d%d%d%d%-%d%d", received[2].name)
+  end)
+
+  it("returns version-only items when timestamp is missing", function()
+    local received
+    search.versions_display("a", "b", function(_, items)
+      received = items
+    end, function(_, _, _, callback)
+      callback({
+        code = 0,
+        stdout = vim.json.encode({
+          response = {
+            docs = { { v = "1.0" }, { v = "2.0", timestamp = 0 } },
+          },
+        }),
+        stderr = "",
+      })
+    end)
+
+    assert.equals(2, #received)
+    assert.equals("1.0", received[1].value)
+    assert.equals("1.0", received[1].name)
+    assert.equals("2.0", received[2].name)
+  end)
 end)

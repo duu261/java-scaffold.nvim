@@ -8,6 +8,10 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 - `:DukeOutdated` and `:DukeUpgrade` now resolve versions of managed dependencies (those without explicit `<version>`, managed by a parent POM or BOM) through `mvn dependency:list`. Managed dependencies appear with their resolved version, marked as managed by the Boot parent when present. Selecting a managed row in either command notifies about `:DukeBootUpgrade` instead of writing. If Maven is missing or the project fails to resolve, the commands degrade to the prior skip-with-count behavior and explicit-version rows continue to work. Transitive artifacts from `dependency:list` are excluded by intersecting with declared root dependencies.
 - `duke.outdated` result rows gain an optional `managed` boolean and `managing_parent` string field. The result table gains an optional `managing_parent` field.
+- `:DukeInfo [groupId:artifactId]` shows latest and recent versions with release dates from Maven Central in a read-only scratch buffer. Prompts for a coordinate when called without an argument.
+- `:DukeAdd` and `:DukeUpgrade` version pickers now show release dates from Maven Central timestamps when available.
+- `:DukeBootUpgrade` now detects Spring Boot versions from `<dependencyManagement>` BOM imports, not just `<parent>`. Projects with a custom corporate parent that manage Boot through `spring-boot-dependencies` in dependency management are recognized; upgrading the BOM version is deferred to a future release.
+- `:DukeAdd` Telescope preview shows artifact description, release date, and version when available. Spring catalog items show name, group, and description in the preview window.
 
 ### Fixed
 
