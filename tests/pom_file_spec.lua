@@ -92,4 +92,55 @@ describe("POM file boundary", function()
     assert.is_true(saved)
     assert.same(edited_lines(), vim.fn.readfile(path))
   end)
+
+  it("snapshots and compare-replaces loaded modified buffers", function()
+    local path = temp_pom(original_lines())
+    local buffer = open(path)
+    vim.api.nvim_buf_set_lines(buffer, 4, 5, false, { "  <version>1.1.0</version>" })
+    local before = vim.api.nvim_buf_get_lines(buffer, 0, -1, false)
+
+    local snapshot = assert(pom_file.snapshot(path))
+    assert.equals(path, snapshot.path)
+    assert.same(before, snapshot.lines)
+    assert.equals(buffer, snapshot.buffer)
+    assert.is_true(snapshot.modified)
+
+    local saved, err = pom_file.replace(snapshot, edited_lines())
+    assert.is_nil(err)
+    assert.is_false(saved)
+    assert.same(edited_lines(), vim.api.nvim_buf_get_lines(buffer, 0, -1, false))
+    assert.same(original_lines(), vim.fn.readfile(path))
+  end)
+
+  it("rejects stale snapshots before writing", function()
+    local path = temp_pom(original_lines())
+    local snapshot = assert(pom_file.snapshot(path))
+    vim.fn.writefile({ "concurrent" }, path)
+
+    local saved, err = pom_file.replace(snapshot, edited_lines())
+
+    assert.is_nil(saved)
+    assert.matches("stale", err)
+    assert.same({ "concurrent" }, vim.fn.readfile(path))
+  end)
+
+  it("restores buffer lines when a clean-buffer save fails", function()
+    local path = temp_pom(original_lines())
+    local buffer = open(path)
+    local snapshot = assert(pom_file.snapshot(path))
+    local original_save = pom_file.save
+    pom_file.save = function(_, lines)
+      vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
+      return nil, "injected save failure"
+    end
+
+    local saved, err = pom_file.replace(snapshot, edited_lines())
+    pom_file.save = original_save
+
+    assert.is_nil(saved)
+    assert.matches("injected", err)
+    assert.same(original_lines(), vim.api.nvim_buf_get_lines(buffer, 0, -1, false))
+    assert.same(original_lines(), vim.fn.readfile(path))
+    assert.is_true(vim.bo[buffer].modified)
+  end)
 end)
