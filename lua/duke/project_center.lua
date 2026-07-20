@@ -3,6 +3,7 @@ local M = {}
 local namespace = vim.api.nvim_create_namespace("duke_project_center")
 local center
 local latest
+local diagnose
 
 local function valid_buffer()
   return center and center.buf and vim.api.nvim_buf_is_valid(center.buf)
@@ -349,9 +350,69 @@ local function render(snapshot, status)
       })
     end
   end
+  local doctor = center.doctor
+  if doctor then
+    lines[#lines + 1] = ""
+    local doctor_state = "idle"
+    if doctor.busy then
+      doctor_state = "loading"
+    elseif doctor.error then
+      doctor_state = "unresolved"
+    elseif doctor.diagnosis then
+      doctor_state = doctor.diagnosis.state or "resolved"
+    end
+    heading("Doctor  " .. doctor_state)
+    if doctor.error then
+      lines[#lines + 1] = "  error  " .. tostring(doctor.error):match("^[^\r\n]+"):gsub("%s+", " ")
+    end
+    local diagnosis = doctor.diagnosis
+    if diagnosis then
+      heading("Warnings", #(diagnosis.warnings or {}))
+      for _, warning in ipairs(diagnosis.warnings or {}) do
+        lines[#lines + 1] = "  " .. tostring(warning):gsub("[\r\n]+", " ")
+      end
+      heading("Findings", #(diagnosis.findings or {}))
+      for _, finding in ipairs(diagnosis.findings or {}) do
+        local selected = doctor.selected_repairs[finding.id] and "* " or ""
+        node(selected .. require("duke.picker").format_doctor_finding(finding), {
+          kind = "doctor_finding",
+          label = finding.coordinate,
+          finding_id = finding.id,
+          finding = finding,
+          repairable = finding.repairable,
+        })
+        local owner = finding.ownership
+        if owner then
+          local location = owner.pom_label or "unknown POM"
+          if owner.line then
+            location = location .. ":" .. owner.line
+          end
+          lines[#lines + 1] = "    owner " .. tostring(owner.kind or "unknown") .. "  " .. location
+        end
+        if not finding.repairable then
+          lines[#lines + 1] = "    blocked "
+            .. tostring(finding.blocked_reason or "writable owner unavailable")
+        end
+      end
+    end
+    if doctor.plan then
+      lines[#lines + 1] = string.format(
+        "  Plan  %d files  %d changes",
+        doctor.plan.preview.file_count or 0,
+        doctor.plan.preview.change_count or 0
+      )
+    end
+    if doctor.receipt then
+      lines[#lines + 1] = string.format(
+        "  Receipt  fixed %d  remaining %d",
+        doctor.receipt.fixed or 0,
+        doctor.receipt.remaining or 0
+      )
+    end
+  end
   lines[#lines + 1] = ""
   lines[#lines + 1] = "<CR> open  r resolve  a add  u upgrade  x remove  p paths  "
-    .. "g declaration  / search  l log  ? help  q close"
+    .. "g declaration  d doctor  P plan  A apply  L deep  / search  l log  ? help  q close"
 
   vim.bo[center.buf].modifiable = true
   vim.api.nvim_buf_set_lines(center.buf, 0, -1, false, lines)
@@ -456,12 +517,41 @@ local function finding_detail(node)
   return lines
 end
 
+local function doctor_finding_detail(finding)
+  local lines = {
+    finding.coordinate or "unknown",
+    "",
+    "Kind: " .. tostring(finding.kind or "unknown"),
+    "Severity: " .. tostring(finding.severity or "unknown"),
+    "Requested: " .. table.concat(finding.requested_versions or {}, ", "),
+    "Selected: " .. tostring(finding.selected_version or "unknown"),
+    "Repairable: " .. tostring(finding.repairable == true),
+  }
+  if finding.ownership then
+    lines[#lines + 1] = "Owner: " .. tostring(finding.ownership.kind or "unknown")
+    lines[#lines + 1] = "POM: " .. tostring(finding.ownership.pom_label or "unknown")
+    lines[#lines + 1] = "Line: " .. tostring(finding.ownership.line or "unknown")
+  end
+  if finding.blocked_reason then
+    lines[#lines + 1] = "Blocked: " .. finding.blocked_reason
+  end
+  if #(finding.paths or {}) > 0 then
+    lines[#lines + 1] = "Paths:"
+    for _, path in ipairs(finding.paths) do
+      lines[#lines + 1] = "  " .. table.concat(path, " -> ")
+    end
+  end
+  return lines
+end
+
 local function open_node(node)
   if not node then
     return
   end
   if node.kind == "dependency" and node.detail then
     show_detail("dependency-" .. node.label, dependency_detail(node))
+  elseif node.kind == "doctor_finding" then
+    show_detail("doctor-" .. node.label, doctor_finding_detail(node.finding))
   elseif node.kind == "finding" then
     show_detail("finding-" .. node.label, finding_detail(node))
   elseif node.detail then
@@ -512,6 +602,19 @@ local function refresh(resolve)
 end
 
 local function dependency_paths(node)
+  if node and node.kind == "doctor_finding" then
+    local paths = node.finding.paths or {}
+    if #paths == 0 then
+      vim.notify("duke.nvim: no dependency paths recorded for this finding")
+      return
+    end
+    local lines = { "Dependency paths", "" }
+    for _, path in ipairs(paths) do
+      lines[#lines + 1] = table.concat(path, " -> ")
+    end
+    show_detail("doctor-paths-" .. node.label, lines)
+    return
+  end
   if not node or node.kind ~= "dependency" then
     return
   end
@@ -542,6 +645,21 @@ end
 
 local function jump_to_declaration(node)
   if not node then
+    return
+  end
+  if node.kind == "doctor_finding" then
+    local owner = node.finding.ownership
+    if not owner or not owner.pom_label or not center.snapshot then
+      vim.notify("duke.nvim: owning declaration is unknown")
+      return
+    end
+    local root = vim.fs.normalize(center.snapshot.root)
+    local path = vim.fs.normalize(vim.fs.joinpath(root, owner.pom_label))
+    if path ~= root and path:sub(1, #root + 1) ~= root .. "/" then
+      vim.notify("duke.nvim: owning declaration is outside the workspace")
+      return
+    end
+    open_path(path, owner.line)
     return
   end
   local module = module_for_node(center.snapshot, node)
@@ -584,6 +702,14 @@ local function show_help()
     "x     Remove dependencies from the selected Maven module",
     "p     Show dependency paths",
     "g     Jump to the owning declaration",
+    "d     Run Maven Doctor",
+    "L     Run deep Maven Doctor; may compile test sources",
+    "u     Stage a version repair on a Doctor finding",
+    "x     Stage an exclusion on a Doctor conflict",
+    "c     Clear staged Doctor repairs",
+    "P     Build and preview staged Doctor repairs",
+    "A     Confirm and apply the current Doctor plan",
+    "R     Refresh Doctor findings and compare the receipt",
     "/     Search visible project nodes",
     "l     Open :DukeLog",
     "?     Show this help",
@@ -625,12 +751,40 @@ local function search_nodes()
 end
 
 local function show_plan_preview(descriptor)
-  local lines = { "Before", "" }
-  vim.list_extend(lines, descriptor.preview.before)
-  lines[#lines + 1] = ""
-  lines[#lines + 1] = "After"
-  lines[#lines + 1] = ""
-  vim.list_extend(lines, descriptor.preview.after)
+  local lines = {}
+  if descriptor.preview.files then
+    for _, file in ipairs(descriptor.preview.files) do
+      lines[#lines + 1] = file.pom_label
+      lines[#lines + 1] = ""
+      for _, change in ipairs(file.changes or {}) do
+        if change.kind == "upgrade" then
+          lines[#lines + 1] = string.format(
+            "  %s  %s -> %s",
+            change.coordinate or change.property or "version",
+            change.before,
+            change.after
+          )
+          if #(change.consumers or {}) > 0 then
+            lines[#lines + 1] = "    consumers  " .. table.concat(change.consumers, ", ")
+          end
+        else
+          lines[#lines + 1] = string.format(
+            "  exclude %s from %s",
+            change.excluded_coordinate,
+            change.direct_coordinate
+          )
+        end
+      end
+      lines[#lines + 1] = ""
+    end
+  else
+    lines = { "Before", "" }
+    vim.list_extend(lines, descriptor.preview.before)
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "After"
+    lines[#lines + 1] = ""
+    vim.list_extend(lines, descriptor.preview.after)
+  end
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -646,7 +800,7 @@ local function show_plan_preview(descriptor)
     col = math.max(0, math.floor((vim.o.columns - width) / 2)),
     style = "minimal",
     border = "single",
-    title = "Maven upgrade plan",
+    title = "Maven repair plan",
     title_pos = "center",
   })
   return win
@@ -734,6 +888,253 @@ local function plan_upgrades(node)
   }, guarded("upgrade selection", build))
 end
 
+local function doctor_finding(node)
+  if node and node.kind == "doctor_finding" then
+    return node.finding
+  end
+end
+
+diagnose = function(deep)
+  if not valid_buffer() or not center.doctor then
+    return
+  end
+  center.doctor.generation = center.doctor.generation + 1
+  local generation = center.doctor.generation
+  center.doctor.busy = true
+  center.doctor.error = nil
+  render(center.snapshot)
+  require("duke.api").diagnose_workspace(
+    { path = center.path, deep = deep == true },
+    guarded("Doctor completion", function(err, diagnosis)
+      if
+        not valid_buffer()
+        or not center
+        or not center.doctor
+        or generation ~= center.doctor.generation
+      then
+        return
+      end
+      center.doctor.busy = false
+      if err then
+        center.doctor.error = err
+        require("duke.log").add("ERROR", err)
+        render(center.snapshot)
+        return
+      end
+      center.doctor.error = nil
+      center.doctor.diagnosis = diagnosis
+      center.doctor.selected_repairs = {}
+      center.doctor.plan = nil
+      local receipt = center.doctor.receipt
+      if receipt and receipt.pending then
+        local current = {}
+        for _, finding in ipairs(diagnosis.findings or {}) do
+          current[finding.id] = true
+        end
+        local remaining = 0
+        local total = 0
+        for id in pairs(receipt.before_ids) do
+          total = total + 1
+          if current[id] then
+            remaining = remaining + 1
+          end
+        end
+        receipt.fixed = total - remaining
+        receipt.remaining = remaining
+        receipt.pending = false
+      end
+      render(center.snapshot)
+    end)
+  )
+end
+
+local function stage_upgrade(node)
+  local finding = doctor_finding(node)
+  if not finding then
+    plan_upgrades(node)
+    return
+  end
+  if not finding.repairable then
+    vim.notify("duke.nvim: " .. tostring(finding.blocked_reason or "finding is not repairable"))
+    return
+  end
+  require("duke.picker").input(
+    "New version for " .. finding.coordinate .. ": ",
+    finding.selected_version or "",
+    guarded("Doctor version input", function(value)
+      value = value and vim.trim(value) or ""
+      if value == "" or not valid_buffer() then
+        return
+      end
+      center.doctor.selected_repairs[finding.id] = {
+        finding_id = finding.id,
+        new_version = value,
+      }
+      center.doctor.plan = nil
+      render(center.snapshot)
+    end)
+  )
+end
+
+local function stage_exclusion(node)
+  local finding = doctor_finding(node)
+  if not finding then
+    module_action(node, "remove_dependency")
+    return
+  end
+  if finding.kind ~= "version_conflict" or #(finding.paths or {}) == 0 then
+    vim.notify("duke.nvim: selected finding has no excludable dependency path")
+    return
+  end
+  local choices = {}
+  for index, path in ipairs(finding.paths) do
+    choices[#choices + 1] = { index = index, name = table.concat(path, " -> ") }
+  end
+  require("duke.picker").select_one(
+    choices,
+    {
+      prompt = "Select dependency path to exclude",
+      format_item = function(item)
+        return item.name
+      end,
+    },
+    guarded("Doctor exclusion selection", function(choice)
+      if not choice or not valid_buffer() then
+        return
+      end
+      center.doctor.selected_repairs[finding.id] = {
+        finding_id = finding.id,
+        action = "exclude",
+        path_index = choice.index,
+      }
+      center.doctor.plan = nil
+      render(center.snapshot)
+    end)
+  )
+end
+
+local function build_doctor_plan()
+  local doctor = center and center.doctor
+  if not doctor or not doctor.diagnosis or doctor.busy then
+    return
+  end
+  local repairs = vim.tbl_values(doctor.selected_repairs)
+  table.sort(repairs, function(left, right)
+    return left.finding_id < right.finding_id
+  end)
+  if #repairs == 0 then
+    vim.notify("duke.nvim: select at least one Doctor repair")
+    return
+  end
+  doctor.generation = doctor.generation + 1
+  local generation = doctor.generation
+  doctor.busy = true
+  doctor.error = nil
+  render(center.snapshot)
+  require("duke.api").plan_repairs(
+    {
+      diagnosis_id = doctor.diagnosis.id,
+      repairs = repairs,
+    },
+    guarded("Doctor plan completion", function(err, descriptor)
+      if not valid_buffer() or not center or generation ~= center.doctor.generation then
+        return
+      end
+      center.doctor.busy = false
+      if err then
+        center.doctor.error = err
+        render(center.snapshot)
+        return
+      end
+      center.doctor.plan = descriptor
+      render(center.snapshot)
+      show_plan_preview(descriptor)
+    end)
+  )
+end
+
+local function apply_doctor_plan()
+  local doctor = center and center.doctor
+  if not doctor or not doctor.plan or doctor.busy then
+    vim.notify("duke.nvim: build a Doctor plan before applying")
+    return
+  end
+  local preview = doctor.plan.preview
+  local consumers = {}
+  local seen_consumers = {}
+  for _, file in ipairs(preview.files or {}) do
+    for _, change in ipairs(file.changes or {}) do
+      for _, consumer in ipairs(change.consumers or {}) do
+        if not seen_consumers[consumer] then
+          seen_consumers[consumer] = true
+          consumers[#consumers + 1] = consumer
+        end
+      end
+    end
+  end
+  table.sort(consumers)
+  local message = string.format(
+    "Apply Maven repairs to %d file%s (%d modified buffer%s)?",
+    preview.file_count or 0,
+    preview.file_count == 1 and "" or "s",
+    preview.modified_buffer_count or 0,
+    preview.modified_buffer_count == 1 and "" or "s"
+  )
+  if #consumers > 0 then
+    message = message .. "\nShared consumers: " .. table.concat(consumers, ", ")
+  end
+  if not require("duke.picker").confirm(message, "Apply") then
+    require("duke.reactor_plan").discard(doctor.plan)
+    doctor.plan = nil
+    render(center.snapshot)
+    return
+  end
+  local before_ids = {}
+  for id in pairs(doctor.selected_repairs) do
+    before_ids[id] = true
+  end
+  local descriptor = doctor.plan
+  doctor.generation = doctor.generation + 1
+  local generation = doctor.generation
+  doctor.busy = true
+  render(center.snapshot)
+  require("duke.api").apply_reactor_plan(
+    descriptor,
+    guarded("Doctor apply completion", function(err, result)
+      if not valid_buffer() or not center or generation ~= center.doctor.generation then
+        return
+      end
+      center.doctor.busy = false
+      if err or not result or not result.ok then
+        center.doctor.error = err or (result and result.error) or "reactor repair failed"
+        render(center.snapshot)
+        return
+      end
+      center.doctor.plan = nil
+      center.doctor.selected_repairs = {}
+      center.doctor.receipt = {
+        pending = true,
+        before_ids = before_ids,
+        fixed = 0,
+        remaining = vim.tbl_count(before_ids),
+        result = vim.deepcopy(result),
+      }
+      render(center.snapshot)
+    end)
+  )
+end
+
+local function confirm_deep_diagnosis()
+  if
+    require("duke.picker").confirm(
+      "Deep Maven analysis may compile main and test sources. Continue?",
+      "Analyze"
+    )
+  then
+    diagnose(true)
+  end
+end
+
 local function set_keymaps(buf)
   local opts = { buffer = buf, silent = true, nowait = true }
   vim.keymap.set("n", "q", guarded("close", close), opts)
@@ -765,7 +1166,7 @@ local function set_keymaps(buf)
     "n",
     "x",
     guarded("remove", function()
-      module_action(selected_node(), "remove_dependency")
+      stage_exclusion(selected_node())
     end),
     opts
   )
@@ -789,17 +1190,61 @@ local function set_keymaps(buf)
     "n",
     "u",
     guarded("upgrade", function()
-      plan_upgrades(selected_node())
+      stage_upgrade(selected_node())
     end),
     opts
   )
   vim.keymap.set("n", "?", guarded("help", show_help), opts)
+  vim.keymap.set(
+    "n",
+    "d",
+    guarded("Doctor", function()
+      diagnose(false)
+    end),
+    opts
+  )
+  vim.keymap.set("n", "L", guarded("deep Doctor", confirm_deep_diagnosis), opts)
+  vim.keymap.set("n", "P", guarded("Doctor plan", build_doctor_plan), opts)
+  vim.keymap.set("n", "A", guarded("Doctor apply", apply_doctor_plan), opts)
+  vim.keymap.set(
+    "n",
+    "c",
+    guarded("Doctor clear", function()
+      if center and center.doctor then
+        center.doctor.selected_repairs = {}
+        center.doctor.plan = nil
+        render(center.snapshot)
+      end
+    end),
+    opts
+  )
+  vim.keymap.set(
+    "n",
+    "R",
+    guarded("Doctor proof refresh", function()
+      diagnose(false)
+    end),
+    opts
+  )
   vim.keymap.set("n", "/", guarded("search", search_nodes), opts)
   vim.keymap.set("n", "l", guarded("log", require("duke.log").show), opts)
 end
 
 function M.toggle(opts)
   if valid_buffer() then
+    if opts and opts.doctor then
+      if valid_window() then
+        vim.api.nvim_set_current_win(center.win)
+      end
+      if not center.doctor.busy then
+        if opts.deep then
+          confirm_deep_diagnosis()
+        else
+          diagnose(false)
+        end
+      end
+      return
+    end
     close()
     return
   end
@@ -825,6 +1270,15 @@ function M.toggle(opts)
     path = path,
     generation = 0,
     snapshot = latest and latest.path == path and vim.deepcopy(latest.snapshot) or nil,
+    doctor = {
+      busy = false,
+      generation = 0,
+      diagnosis = nil,
+      selected_repairs = {},
+      plan = nil,
+      receipt = nil,
+      error = nil,
+    },
   }
   set_keymaps(buf)
   if center.snapshot then
@@ -835,6 +1289,13 @@ function M.toggle(opts)
   end
   if vim.api.nvim_win_is_valid(origin_win) then
     vim.api.nvim_set_current_win(origin_win)
+  end
+  if opts.doctor then
+    if opts.deep then
+      confirm_deep_diagnosis()
+    else
+      diagnose(false)
+    end
   end
 end
 
@@ -849,6 +1310,7 @@ function M.state()
         win = center.win,
         path = center.path,
         snapshot = center.snapshot,
+        doctor = center.doctor,
       })
     or nil
 end
@@ -882,6 +1344,12 @@ vim.api.nvim_create_autocmd("BufWritePost", {
     end
     if center and center.snapshot and snapshot_owns_path(center.snapshot, path) then
       center.snapshot = nil
+      center.doctor.generation = center.doctor.generation + 1
+      center.doctor.busy = false
+      center.doctor.diagnosis = nil
+      center.doctor.selected_repairs = {}
+      center.doctor.plan = nil
+      center.doctor.error = nil
       refresh(false)
     end
   end),

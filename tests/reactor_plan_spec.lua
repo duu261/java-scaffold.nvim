@@ -130,6 +130,7 @@ describe("reactor repair plans", function()
     end)
     assert.is_nil(err)
     assert.is_string(descriptor.id)
+    assert.equals(0, descriptor.preview.modified_buffer_count)
     assert.equals("pom.xml", descriptor.preview.files[1].pom_label)
     assert.same({
       {

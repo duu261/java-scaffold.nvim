@@ -317,11 +317,15 @@ function M.build(opts, callback)
     end
     local entries = {}
     local all_changes = {}
+    local modified_buffer_count = 0
     for path, repairs in pairs(grouped) do
       local snapshot, snapshot_err = pom_file.snapshot(path)
       if not snapshot then
         finish(snapshot_err)
         return
+      end
+      if snapshot.modified then
+        modified_buffer_count = modified_buffer_count + 1
       end
       local after, changes, repair_err = pom_repair.apply(snapshot.lines, repairs)
       if not after then
@@ -370,6 +374,7 @@ function M.build(opts, callback)
       id = id,
       preview = {
         file_count = #files,
+        modified_buffer_count = modified_buffer_count,
         change_count = #all_changes,
         files = files,
       },

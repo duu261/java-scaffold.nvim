@@ -43,6 +43,18 @@ describe("duke.picker", function()
     )
   end)
 
+  it("formats Doctor findings without private paths", function()
+    local format = require("duke.picker").format_doctor_finding
+    assert.equals(
+      "com.acme:library  requested 1.0.0, 2.0.0  selected 2.0.0",
+      format({
+        coordinate = "com.acme:library",
+        requested_versions = { "1.0.0", "2.0.0" },
+        selected_version = "2.0.0",
+      })
+    )
+  end)
+
   it("shows fallback multi-select count in prompt and Done row", function()
     local calls = {}
     vim.ui.select = function(choices, opts, callback)

@@ -20,6 +20,17 @@ function M.format_dependency(item)
   return text
 end
 
+function M.format_doctor_finding(item)
+  local text = item.coordinate or "unknown"
+  if item.requested_versions and #item.requested_versions > 0 then
+    text = text .. "  requested " .. table.concat(item.requested_versions, ", ")
+  end
+  if item.selected_version then
+    text = text .. "  selected " .. item.selected_version
+  end
+  return text
+end
+
 local function display(item, formatter)
   if type(item) == "table" and item.__done then
     return item.name

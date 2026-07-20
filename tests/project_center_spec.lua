@@ -24,6 +24,7 @@ describe("Java Project Center", function()
     vim.cmd("silent! enew!")
     package.loaded["duke.project_center"] = nil
     package.loaded["duke.log"] = nil
+    package.loaded["duke.api"] = nil
     package.loaded["duke.picker"] = nil
     package.loaded["duke.workspace"] = nil
     project_center = require("duke.project_center")
@@ -50,6 +51,7 @@ describe("Java Project Center", function()
     vim.fn.delete(root, "rf")
     package.loaded["duke.project_center"] = nil
     package.loaded["duke.workspace"] = nil
+    package.loaded["duke.api"] = nil
   end)
 
   it("opens local data without stealing focus or changing editor state", function()
@@ -613,6 +615,242 @@ describe("Java Project Center", function()
 
     assert.equals(2, inspections)
     assert.equals("local", project_center.state().snapshot.state)
+  end)
+
+  it("renders Doctor findings, warnings, ownership, and blocked reasons", function()
+    package.loaded["duke.api"] = {
+      diagnose_workspace = function(opts, callback)
+        assert.equals(root, opts.path)
+        assert.is_false(opts.deep)
+        callback(nil, {
+          id = "diagnosis-1",
+          state = "partial",
+          warnings = { "active profiles unavailable", "usage unavailable" },
+          findings = {
+            {
+              id = "version_drift:com.acme:library",
+              kind = "version_drift",
+              severity = "warning",
+              coordinate = "com.acme:library",
+              requested_versions = { "1.0.0", "2.0.0" },
+              selected_version = "2.0.0",
+              repairable = true,
+              ownership = {
+                kind = "dependency_management",
+                pom_label = "pom.xml",
+                line = 14,
+                writable = true,
+              },
+            },
+            {
+              id = "unknown_ownership:com.acme:external",
+              kind = "unknown_ownership",
+              severity = "info",
+              coordinate = "com.acme:external",
+              repairable = false,
+              blocked_reason = "external parent outside reactor",
+              ownership = { kind = "external_parent", writable = false },
+            },
+          },
+        })
+      end,
+    }
+
+    project_center.toggle({ path = root, doctor = true })
+    assert.is_true(vim.wait(1000, function()
+      local state = project_center.state()
+      return state and state.doctor and state.doctor.diagnosis ~= nil
+    end))
+    local state = project_center.state()
+    local rendered = table.concat(vim.api.nvim_buf_get_lines(state.buf, 0, -1, false), "\n")
+    assert.matches("Doctor  partial", rendered)
+    assert.matches("Warnings %(2%)", rendered)
+    assert.is_truthy(
+      rendered:find("com.acme:library  requested 1.0.0, 2.0.0  selected 2.0.0", 1, true)
+    )
+    assert.is_truthy(rendered:find("owner dependency_management  pom.xml:14", 1, true))
+    assert.is_truthy(rendered:find("blocked external parent outside reactor", 1, true))
+  end)
+
+  it("stages Doctor repairs, plans exact IDs, applies once, and proves refresh", function()
+    local diagnosis_calls = 0
+    local planned
+    local applied
+    local finding = {
+      id = "version_drift:com.acme:library",
+      kind = "version_drift",
+      severity = "warning",
+      coordinate = "com.acme:library",
+      requested_versions = { "1.0.0", "2.0.0" },
+      selected_version = "2.0.0",
+      repairable = true,
+      ownership = { kind = "dependency", pom_label = "pom.xml", line = 4, writable = true },
+    }
+    package.loaded["duke.api"] = {
+      diagnose_workspace = function(_, callback)
+        diagnosis_calls = diagnosis_calls + 1
+        callback(nil, {
+          id = "diagnosis-" .. diagnosis_calls,
+          state = "resolved",
+          warnings = {},
+          findings = diagnosis_calls == 1 and { finding } or {},
+        })
+      end,
+      plan_repairs = function(opts, callback)
+        planned = opts
+        callback(nil, {
+          id = "plan-1",
+          coordinates = { "com.acme:library" },
+          preview = {
+            file_count = 1,
+            modified_buffer_count = 0,
+            change_count = 1,
+            files = {
+              {
+                pom_label = "pom.xml",
+                changes = {
+                  {
+                    kind = "upgrade",
+                    coordinate = "com.acme:library",
+                    consumers = { "com.acme:library" },
+                    before = "1.0.0",
+                    after = "3.0.0",
+                  },
+                },
+              },
+            },
+          },
+        })
+      end,
+      apply_reactor_plan = function(descriptor, callback)
+        applied = descriptor
+        callback(nil, {
+          ok = true,
+          changed_files = { vim.fs.joinpath(root, "pom.xml") },
+          modified_buffers = {},
+        })
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      input = function(_, _, callback)
+        callback("3.0.0")
+      end,
+      confirm = function(message)
+        assert.is_truthy(message:find("1 file", 1, true))
+        return true
+      end,
+      format_doctor_finding = function(item)
+        return item.coordinate
+      end,
+    }
+
+    project_center.toggle({ path = root, doctor = true })
+    local state = project_center.state()
+    local finding_line = assert(rendered_line(state.buf, "com.acme:library"))
+    press(state, finding_line, "u")
+    press(state, finding_line, "P")
+    assert.same({
+      diagnosis_id = "diagnosis-1",
+      repairs = { { finding_id = finding.id, new_version = "3.0.0" } },
+    }, planned)
+    press(state, finding_line, "A")
+    assert.equals("plan-1", applied.id)
+    press(state, finding_line, "R")
+
+    local rendered = table.concat(vim.api.nvim_buf_get_lines(state.buf, 0, -1, false), "\n")
+    assert.is_truthy(rendered:find("Receipt  fixed 1  remaining 0", 1, true))
+  end)
+
+  it("ignores stale Doctor callbacks and confirms deep analysis", function()
+    local pending = {}
+    local confirmed = 0
+    package.loaded["duke.api"] = {
+      diagnose_workspace = function(opts, callback)
+        pending[#pending + 1] = { deep = opts.deep, callback = callback }
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      confirm = function(message)
+        assert.is_truthy(message:find("test sources", 1, true))
+        confirmed = confirmed + 1
+        return true
+      end,
+    }
+
+    project_center.toggle({ path = root })
+    local state = project_center.state()
+    press(state, 1, "d")
+    press(state, 1, "L")
+    assert.equals(2, #pending)
+    assert.is_false(pending[1].deep)
+    assert.is_true(pending[2].deep)
+    assert.equals(1, confirmed)
+    pending[2].callback(nil, { id = "new", state = "resolved", warnings = {}, findings = {} })
+    pending[1].callback(nil, { id = "old", state = "partial", warnings = {}, findings = {} })
+    assert.equals("new", project_center.state().doctor.diagnosis.id)
+  end)
+
+  it("stages an exclusion with the exact selected finding path", function()
+    local planned
+    package.loaded["duke.api"] = {
+      diagnose_workspace = function(_, callback)
+        callback(nil, {
+          id = "diagnosis-conflict",
+          state = "resolved",
+          warnings = {},
+          findings = {
+            {
+              id = "version_conflict:com.acme:legacy",
+              kind = "version_conflict",
+              severity = "warning",
+              coordinate = "com.acme:legacy",
+              repairable = true,
+              paths = {
+                { "com.acme:app", "com.acme:first", "com.acme:legacy" },
+                { "com.acme:app", "com.acme:second", "com.acme:legacy" },
+              },
+              ownership = { kind = "dependency", pom_label = "pom.xml", line = 4 },
+            },
+          },
+        })
+      end,
+      plan_repairs = function(opts, callback)
+        planned = opts
+        callback(nil, {
+          id = "exclude-plan",
+          preview = {
+            file_count = 1,
+            modified_buffer_count = 0,
+            change_count = 1,
+            files = { { pom_label = "pom.xml", changes = {} } },
+          },
+        })
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      format_doctor_finding = function(item)
+        return item.coordinate
+      end,
+      select_one = function(items, _, callback)
+        callback(items[2])
+      end,
+    }
+
+    project_center.toggle({ path = root, doctor = true })
+    local state = project_center.state()
+    local line = assert(rendered_line(state.buf, "com.acme:legacy"))
+    press(state, line, "x")
+    press(state, line, "P")
+    assert.same({
+      diagnosis_id = "diagnosis-conflict",
+      repairs = {
+        {
+          finding_id = "version_conflict:com.acme:legacy",
+          action = "exclude",
+          path_index = 2,
+        },
+      },
+    }, planned)
   end)
 
   it("lists every sidebar action in help", function()
