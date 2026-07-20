@@ -4,10 +4,11 @@ local Model = {}
 Model.__index = Model
 
 local function refresh(self)
+  local schema = require("duke.creation.schema")
   self.state.derived.project_dir =
     vim.fs.joinpath(self.state.values.destination or "", self.state.values.artifact_id or "")
-  self.state.errors =
-    require("duke.creation.schema").validate(self.state.kind, self.config, self.state)
+  self.state.fields = schema.fields(self.state.kind, self.config, self.state)
+  self.state.errors = schema.validate(self.state.kind, self.config, self.state)
 end
 
 local function field_exists(self, key)
