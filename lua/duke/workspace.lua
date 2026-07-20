@@ -288,16 +288,14 @@ function M.inspect(opts, callback)
       finish(err, result)
       return
     end
-    if result.kind ~= "maven" then
-      finish(nil, result)
-      return
-    end
-    require("duke.maven_model").enrich(result, opts, function(resolve_err, enriched)
+    local adapter = result.kind == "maven" and require("duke.maven_model")
+      or require("duke.gradle_model")
+    adapter.enrich(result, opts, function(resolve_err, enriched)
       if current_generation ~= generation then
         finish("workspace inspection superseded by a newer refresh")
         return
       end
-      if enriched then
+      if enriched and result.kind == "maven" then
         enriched.analysis = require("duke.dependency_analyzer").analyze(enriched)
       end
       finish(resolve_err, enriched)
