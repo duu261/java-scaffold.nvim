@@ -860,6 +860,152 @@ describe("POM editing", function()
     end)
   end)
 
+  describe("project model", function()
+    local function project_lines()
+      return {
+        "<project>",
+        "  <parent>",
+        "    <groupId>com.acme</groupId>",
+        "    <artifactId>parent</artifactId>",
+        "    <version>1.0.0</version>",
+        "  </parent>",
+        "  <artifactId>root</artifactId>",
+        "  <packaging>pom</packaging>",
+        "  <properties>",
+        "    <guava.version>32.1.3-jre</guava.version>",
+        "  </properties>",
+        "  <modules>",
+        "    <module>app</module>",
+        "  </modules>",
+        "  <dependencies>",
+        "    <dependency>",
+        "      <groupId>com.google.guava</groupId>",
+        "      <artifactId>guava</artifactId>",
+        "      <version>${guava.version}</version>",
+        "    </dependency>",
+        "    <dependency>",
+        "      <groupId>com.acme</groupId>",
+        "      <artifactId>helper</artifactId>",
+        "      <version>${guava.version}</version>",
+        "    </dependency>",
+        "  </dependencies>",
+        "</project>",
+      }
+    end
+
+    it("models direct project fields, modules, properties, and consumers", function()
+      local model, err = pom.model(project_lines())
+
+      assert.is_nil(err)
+      assert.same(
+        { group_id = "com.acme", artifact_id = "root", version = "1.0.0" },
+        model.coordinates
+      )
+      assert.equals("pom", model.packaging)
+      assert.same({ { path = "app", line = 13 } }, model.modules)
+      assert.equals(2, #model.dependencies)
+      assert.same(
+        { "com.acme:helper", "com.google.guava:guava" },
+        model.properties["guava.version"].consumers
+      )
+      assert.same({
+        { coordinate = "com.google.guava:guava", kind = "dependency", line = 16 },
+        { coordinate = "com.acme:helper", kind = "dependency", line = 21 },
+      }, model.properties["guava.version"].consumer_refs)
+      assert.equals("32.1.3-jre", model.properties["guava.version"].value)
+      assert.equals("property", model.properties["guava.version"].kind)
+    end)
+
+    it("updates literal and property targets in one exact batch", function()
+      local lines = project_lines()
+      lines[24] = "      <version>1.0.0</version>"
+      table.insert(lines, 24, "      <classifier>tests</classifier>")
+      local model = assert(pom.model(lines))
+      local helper = model.dependencies[2]
+      local updated, err = pom.update_versions(lines, {
+        { target = helper, new_version = "2.0.0" },
+        { target = model.properties["guava.version"], new_version = "33.4.8-jre-long" },
+      })
+
+      assert.is_nil(err)
+      assert.equals("    <guava.version>33.4.8-jre-long</guava.version>", updated[10])
+      assert.equals("      <version>2.0.0</version>", updated[25])
+      assert.equals("      <classifier>tests</classifier>", updated[24])
+      assert.equals("32.1.3-jre", model.properties["guava.version"].value)
+      assert.equals("    <guava.version>32.1.3-jre</guava.version>", lines[10])
+    end)
+
+    it("rejects duplicate and stale batch targets", function()
+      local lines = project_lines()
+      local model = assert(pom.model(lines))
+      local target = model.properties["guava.version"]
+      local cloned_target = vim.deepcopy(target)
+      local _, duplicate_err = pom.update_versions(lines, {
+        { target = target, new_version = "33.0" },
+        { target = cloned_target, new_version = "34.0" },
+      })
+      local changed = vim.deepcopy(lines)
+      changed[10] = "    <guava.version>user-edit</guava.version>"
+      local unchanged, stale_err = pom.update_versions(changed, {
+        { target = target, new_version = "33.0" },
+      })
+
+      assert.matches("duplicate", duplicate_err)
+      assert.same(changed, unchanged)
+      assert.matches("changed", stale_err)
+    end)
+
+    it("defaults packaging to jar and ignores nested properties", function()
+      local model, err = pom.model({
+        "<project>",
+        "  <groupId>com.acme</groupId>",
+        "  <artifactId>app</artifactId>",
+        "  <version>1.0.0</version>",
+        "  <profiles>",
+        "    <profile>",
+        "      <properties>",
+        "        <profile.version>9.0.0</profile.version>",
+        "      </properties>",
+        "    </profile>",
+        "  </profiles>",
+        "</project>",
+      })
+
+      assert.is_nil(err)
+      assert.equals("jar", model.packaging)
+      assert.same({}, model.properties)
+    end)
+
+    it("rejects ambiguous root property structures and property-backed coordinates", function()
+      local duplicate, duplicate_err = pom.model({
+        "<project>",
+        "  <groupId>com.acme</groupId>",
+        "  <artifactId>app</artifactId>",
+        "  <version>1.0.0</version>",
+        "  <properties>",
+        "    <revision>1</revision>",
+        "    <revision>2</revision>",
+        "  </properties>",
+        "</project>",
+      })
+      local property_coordinates, property_err = pom.model({
+        "<project>",
+        "  <groupId>com.acme</groupId>",
+        "  <artifactId>app</artifactId>",
+        "  <version>${revision}</version>",
+        "  <properties>",
+        "    <revision>1.0.0</revision>",
+        "  </properties>",
+        "</project>",
+      })
+
+      assert.is_nil(duplicate)
+      assert.matches("duplicate", duplicate_err)
+      assert.is_nil(property_coordinates)
+      assert.matches("property%-backed", property_err)
+    end)
+  end)
+
   describe("mvn dependency:list line parsing", function()
     local managed
 

@@ -712,6 +712,7 @@ local function modules_structure(lines)
   local xml = mask_comments(raw_xml)
   local stack = {}
   local modules = {}
+  local module_entries = {}
   local root_modules
   local root_modules_seen = false
   local line_number = 1
@@ -754,6 +755,10 @@ local function modules_structure(lines)
           return nil, "module elements sharing lines with other XML are not supported"
         end
         modules[#modules + 1] = value
+        module_entries[#module_entries + 1] = {
+          path = value,
+          line = node.start_line,
+        }
       elseif node.kind == "root_modules" then
         if node.start_line == line_number then
           return nil, "compact one-line project/modules XML is not supported"
@@ -803,7 +808,255 @@ local function modules_structure(lines)
     project_close = positions.project_close,
     root_modules = root_modules,
     modules = modules,
+    module_entries = module_entries,
   }
+end
+
+local function property_structure(lines)
+  local positions = structure(lines)
+  if not positions.project_close then
+    return nil, "pom.xml has no closing project element"
+  end
+  if positions.project_open == positions.project_close then
+    return nil, "compact one-line project/properties XML is not supported"
+  end
+
+  local raw_xml = table.concat(lines, "\n")
+  local xml = mask_comments(raw_xml)
+  local stack = {}
+  local properties = {}
+  local root_properties_seen = false
+  local line_number = 1
+  local previous_position = 1
+
+  for position, closing, qualified_name, attributes, finish in
+    xml:gmatch("()<(%/?)([%w_:.-]+)([^>]*)>()")
+  do
+    local _, newlines = xml:sub(previous_position, position - 1):gsub("\n", "\n")
+    line_number = line_number + newlines
+    previous_position = position
+
+    local name = qualified_name:match("([^:]+)$")
+    if closing == "/" then
+      local node = stack[#stack]
+      if not node or node.name ~= name then
+        return nil, "malformed pom.xml element nesting"
+      end
+      table.remove(stack)
+
+      if node.kind == "property" then
+        local content = raw_xml:sub(node.content_start, position - 1)
+        if mask_comments(content):find("<", 1, true) then
+          return nil, "nested XML in project property " .. node.name .. " is not supported"
+        end
+        local value = content:match("^%s*(.-)%s*$")
+        if not value or value == "" then
+          return nil, "empty project property " .. node.name .. " is not supported"
+        end
+        if properties[node.name] then
+          return nil, "duplicate project property " .. node.name .. " is not supported"
+        end
+
+        local leading = content:match("^(%s*)") or ""
+        local trailing = content:match("(%s*)$") or ""
+        node.kind = "property"
+        node.value = value
+        node.line = node.start_line
+        node._value_start = node.content_start + #leading
+        node._value_end = position - 1 - #trailing
+        node._end_byte = finish - 1
+        node._block = raw_xml:sub(node._start_byte, node._end_byte)
+        node.consumers = {}
+        node.consumer_refs = {}
+        properties[node.name] = node
+      end
+    else
+      local owner = stack[#stack]
+      local self_closing = attributes:match("/%s*$") ~= nil
+      local kind
+      if name == "project" and not owner then
+        kind = "project"
+      elseif name == "properties" and owner and owner.kind == "project" then
+        if root_properties_seen then
+          return nil, "multiple root properties elements are not supported"
+        end
+        root_properties_seen = true
+        if self_closing then
+          return nil, "self-closing root properties element is not supported"
+        end
+        kind = "root_properties"
+      elseif owner and owner.kind == "root_properties" then
+        if self_closing then
+          return nil, "self-closing project property " .. name .. " is not supported"
+        end
+        kind = "property"
+      end
+
+      if not self_closing then
+        stack[#stack + 1] = {
+          name = name,
+          kind = kind,
+          start_line = line_number,
+          content_start = finish,
+          _start_byte = position,
+        }
+      end
+    end
+  end
+
+  if #stack > 0 then
+    return nil, "pom.xml has unclosed elements"
+  end
+  return properties
+end
+
+function M.model(lines)
+  local fields, fields_err = reactor_structure(lines)
+  if not fields then
+    return nil, fields_err
+  end
+  local dependencies, dependencies_err = dependency_structure(lines)
+  if not dependencies then
+    return nil, dependencies_err
+  end
+  local modules, modules_err = modules_structure(lines)
+  if not modules then
+    return nil, modules_err
+  end
+  local properties, properties_err = property_structure(lines)
+  if not properties then
+    return nil, properties_err
+  end
+
+  local project = fields.project
+  local parent = fields.parent
+  local group_id = project.group_id or parent.group_id
+  local version = project.version or parent.version
+  if not project.artifact_id then
+    return nil, "project artifactId is missing"
+  end
+  if not group_id then
+    return nil, "project groupId is missing"
+  end
+  if not version then
+    return nil, "project version is missing"
+  end
+  if
+    is_property(project.artifact_id)
+    or is_property(group_id)
+    or is_property(project.group_id)
+    or is_property(parent.group_id)
+    or is_property(version)
+    or is_property(project.version)
+    or is_property(parent.version)
+  then
+    return nil, "property-backed project coordinates are not supported"
+  end
+  local packaging = project.packaging or "jar"
+  if is_property(packaging) then
+    return nil, "property-backed project packaging is not supported"
+  end
+
+  for _, dependency in ipairs(dependencies) do
+    dependency.kind = "dependency"
+    dependency.coordinate = dependency.group_id .. ":" .. dependency.artifact_id
+    local property_name = dependency.version and dependency.version:match("^%${([%w_.-]+)}$")
+    if property_name and properties[property_name] then
+      local property = properties[property_name]
+      local consumers = property.consumers
+      consumers[#consumers + 1] = dependency.coordinate
+      property.consumer_refs[#property.consumer_refs + 1] = {
+        kind = "dependency",
+        coordinate = dependency.coordinate,
+        line = dependency.start_line,
+      }
+    end
+  end
+  for _, property in pairs(properties) do
+    table.sort(property.consumers)
+  end
+
+  return {
+    coordinates = {
+      group_id = group_id,
+      artifact_id = project.artifact_id,
+      version = version,
+    },
+    packaging = packaging,
+    modules = modules.module_entries,
+    dependencies = dependencies,
+    properties = properties,
+    spring_boot_version = M.spring_boot_version(lines),
+  }
+end
+
+function M.update_versions(lines, changes)
+  local updated = vim.deepcopy(lines)
+  if type(changes) ~= "table" or #changes == 0 then
+    return updated, "version changes must be a non-empty list"
+  end
+
+  local xml = table.concat(lines, "\n")
+  local replacements = {}
+  local seen = {}
+  for _, change in ipairs(changes) do
+    local target = change.target
+    if type(target) ~= "table" then
+      return updated, "version change target is invalid"
+    end
+    if type(change.new_version) ~= "string" or change.new_version == "" then
+      return updated, "new dependency version must be a non-empty string"
+    end
+
+    local first
+    local last
+    if target.kind == "property" then
+      first = target._value_start
+      last = target._value_end
+    elseif target.kind == "dependency" then
+      if target.version and target.version:match("^%${([%w_.-]+)}$") then
+        return updated, "dependency version uses a property; update the property target"
+      end
+      first = target._version_start
+      last = target._version_end
+    else
+      return updated, "version change target kind is invalid"
+    end
+    if
+      not first
+      or not last
+      or not target._start_byte
+      or not target._end_byte
+      or not target._block
+    then
+      return updated, "version change target has no editable value"
+    end
+    if seen[first] then
+      return updated, "duplicate version change target"
+    end
+    seen[first] = true
+    if xml:sub(target._start_byte, target._end_byte) ~= target._block then
+      return updated, "version change target changed; run command again"
+    end
+    replacements[#replacements + 1] = {
+      first = first,
+      last = last,
+      value = escape_xml(change.new_version),
+    }
+  end
+
+  table.sort(replacements, function(left, right)
+    return left.first > right.first
+  end)
+  for index = 2, #replacements do
+    if replacements[index].last >= replacements[index - 1].first then
+      return updated, "overlapping version change targets"
+    end
+  end
+  for _, replacement in ipairs(replacements) do
+    xml = xml:sub(1, replacement.first - 1) .. replacement.value .. xml:sub(replacement.last + 1)
+  end
+  return vim.split(xml, "\n", { plain = true })
 end
 
 function M.insert_module(lines, module_name)
