@@ -101,4 +101,41 @@ describe("Creation Center renderer", function()
       return action.id == "create" and not action.enabled
     end))
   end)
+
+  it("disables Create while discovery is loading", function()
+    local view = render.settings(
+      snapshot({
+        async = { runtimes = { state = "loading" } },
+      }),
+      { layout = "wide", width = 120, height = 40 }
+    )
+
+    assert.is_truthy(vim.iter(view.actions):any(function(action)
+      return action.id == "create" and not action.enabled
+    end))
+  end)
+
+  it("renders Spring dependency panes and actions", function()
+    local view = render.dependencies(snapshot({ kind = "spring" }), {
+      categories = { "Web", "SQL" },
+      active_category = "Web",
+      category_index = 1,
+      results = {
+        { id = "web", name = "Spring Web", description = "Web applications" },
+      },
+      result_index = 1,
+      selected_ids = { "web" },
+      selected_count = 1,
+      pane = "results",
+      query = "",
+    }, { layout = "wide", width = 120, height = 40 })
+    local text = joined(view)
+
+    assert.is_truthy(text:find("Categories", 1, true))
+    assert.is_truthy(text:find("Spring Web", 1, true))
+    assert.is_truthy(text:find("Selected (1)", 1, true))
+    assert.is_truthy(vim.iter(view.actions):any(function(action)
+      return action.id == "dependency:item:web"
+    end))
+  end)
 end)

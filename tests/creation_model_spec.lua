@@ -79,6 +79,30 @@ describe("creation model", function()
     assert.is_false(creation:resolve_async(fourth, { spring_client = {} }))
   end)
 
+  it("applies structured async value and derived patches", function()
+    local creation = model.new(config, { kind = "spring", cwd = "/work" })
+    local token = creation:begin_async("metadata")
+
+    assert.is_true(creation:resolve_async(token, {
+      values = {
+        java_version = "21",
+        boot_version = "4.0.0",
+        spring_project_type = { id = "maven-project", build = "maven" },
+      },
+      derived = {
+        java_versions = { "17", "21" },
+        boot_version_choices = { "4.0.0" },
+      },
+    }))
+
+    local state = creation:snapshot()
+    assert.equals("21", state.values.java_version)
+    assert.equals("4.0.0", state.values.boot_version)
+    assert.same({ "17", "21" }, state.derived.java_versions)
+    assert.is_nil(state.errors.boot_version)
+    assert.is_nil(state.errors.spring_project_type)
+  end)
+
   it("returns detached snapshots and requests", function()
     local creation = model.new(config, { cwd = "/work" })
     creation:resolve_async(creation:begin_async("runtimes"), {
@@ -107,5 +131,19 @@ describe("creation model", function()
     creation:close()
     assert.is_nil(creation:set("artifact_id", "closed"))
     assert.is_nil(creation:request())
+  end)
+
+  it("blocks requests while discovery is loading", function()
+    local creation = model.new(config, { cwd = "/work" })
+    local token = creation:begin_async("runtimes")
+
+    local request, errors = creation:request()
+    assert.is_nil(request)
+    assert.equals("discovery is still running", errors.async)
+
+    creation:resolve_async(token, {
+      maven_runner_env = { JAVA_HOME = "/jdk/23" },
+    })
+    assert.is_table(creation:request())
   end)
 end)

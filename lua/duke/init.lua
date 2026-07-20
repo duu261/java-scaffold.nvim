@@ -18,38 +18,6 @@ local function cache_fallback_message(fallback)
   return "Spring Initializr unreachable; using cached data from " .. age
 end
 
-local function finish_project(project_dir)
-  local config = require("duke.config").get()
-  local entry_file = require("duke.project").entry(project_dir)
-  if config.entry_selector then
-    local ok, selected = pcall(config.entry_selector, project_dir, entry_file)
-    if ok and type(selected) == "string" and selected ~= "" then
-      entry_file = selected
-    elseif not ok then
-      require("duke.log").add("WARN", "entry_selector failed: " .. tostring(selected))
-    end
-  end
-  vim.cmd.cd(vim.fn.fnameescape(project_dir))
-  local event_ok, event_error = pcall(vim.api.nvim_exec_autocmds, "User", {
-    pattern = "DukeProjectCreated",
-    data = { project_dir = project_dir, entry_file = entry_file },
-  })
-  if not event_ok then
-    require("duke.log").add("WARN", "project-created event failed: " .. tostring(event_error))
-  end
-  require("duke.handoff").open(project_dir, config.handoff, function(err, opened)
-    if opened then
-      notify("project ready: " .. project_dir)
-      return
-    end
-    if err then
-      require("duke.log").add("WARN", err)
-      notify(err .. "; opening in current Neovim", vim.log.levels.WARN)
-    end
-    vim.cmd.edit(vim.fn.fnameescape(entry_file))
-  end, entry_file)
-end
-
 function M.setup(opts)
   require("duke.config").setup(opts)
   runtime_cache = nil
@@ -113,76 +81,15 @@ function M.select_runtime(opts)
 end
 
 function M.new()
-  local workflows = {
-    { id = "maven", name = "Maven quickstart" },
-    { id = "gradle", name = "Gradle Java" },
-    { id = "spring", name = "Spring Boot" },
-  }
-  require("duke.picker").select_one(workflows, {
-    prompt = "Project generator",
-    default = "maven",
-    format_item = function(item)
-      return item.name
-    end,
-  }, function(selected)
-    if selected then
-      M["new_" .. selected.id]()
-    end
-  end)
+  return require("duke.creation").open({})
 end
 
 function M.new_maven()
-  local config = require("duke.config").get()
-  local wizard = require("duke.wizard")
-
-  wizard.sequence(wizard.maven_steps(config), function(state)
-    require("duke.maven").create({
-      command = config.maven.command,
-      cwd = state.destination,
-      group_id = state.group_id,
-      artifact_id = state.artifact_id,
-      package_name = state.package_name,
-      version = config.maven.project_version,
-      wrapper = config.maven.wrapper,
-      java_version = state.java_version,
-      archetype = state.archetype,
-      timeout = config.maven.timeout,
-      env = state.maven_runner_env,
-    }, function(err, project_dir)
-      if err then
-        notify_error(err)
-        return
-      end
-      finish_project(project_dir)
-    end)
-  end)
+  return require("duke.creation").open({ kind = "maven" })
 end
 
 function M.new_gradle()
-  local config = require("duke.config").get()
-  local wizard = require("duke.wizard")
-
-  wizard.sequence(wizard.gradle_steps(config), function(state)
-    require("duke.gradle").create({
-      command = config.gradle.command,
-      cwd = state.destination,
-      group_id = state.group_id,
-      artifact_id = state.artifact_id,
-      package_name = state.package_name,
-      java_version = state.java_version,
-      project_type = state.gradle_project_type,
-      dsl = state.dsl,
-      test_framework = config.gradle.test_framework,
-      timeout = config.gradle.timeout,
-      env = state.gradle_runner_env,
-    }, function(err, project_dir)
-      if err then
-        notify_error(err)
-        return
-      end
-      finish_project(project_dir)
-    end)
-  end)
+  return require("duke.creation").open({ kind = "gradle" })
 end
 
 local function fetch_client(callback)
@@ -213,34 +120,7 @@ local function fetch_catalog(boot_version, callback)
 end
 
 function M.new_spring()
-  local config = require("duke.config").get()
-  local wizard = require("duke.wizard")
-
-  wizard.sequence(wizard.spring_steps(config), function(state)
-    require("duke.spring").create({
-      url = config.spring.starter_url,
-      cwd = state.destination,
-      group_id = state.group_id,
-      artifact_id = state.artifact_id,
-      name = state.name,
-      description = state.description,
-      package_name = state.package_name,
-      java_version = state.java_version,
-      boot_version = state.boot_version,
-      dependencies = state.dependency_ids,
-      project_type = state.spring_project_type.id,
-      build = state.spring_project_type.build,
-      language = state.spring_language,
-      packaging = state.spring_packaging,
-      timeout = config.spring.timeout,
-    }, function(err, project_dir)
-      if err then
-        notify_error(err)
-        return
-      end
-      finish_project(project_dir)
-    end)
-  end)
+  return require("duke.creation").open({ kind = "spring" })
 end
 
 function M.new_module()

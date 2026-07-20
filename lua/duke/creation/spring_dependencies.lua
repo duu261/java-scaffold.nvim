@@ -69,6 +69,35 @@ function View:focus(pane)
   return true
 end
 
+function View:cycle_pane(delta)
+  local order = { "categories", "results", "selected" }
+  local current = vim.fn.index(order, self.pane) + 1
+  local next_index = ((current - 1 + delta) % #order) + 1
+  self.pane = order[next_index]
+  return true
+end
+
+function View:set_category(index)
+  index = tonumber(index)
+  if not index or not self.categories[index] then
+    return false
+  end
+  self.category_index = index
+  self.result_index = 1
+  self.query = ""
+  return true
+end
+
+function View:set_result(id)
+  for index, item in ipairs(results(self)) do
+    if item.id == id then
+      self.result_index = index
+      return true
+    end
+  end
+  return false
+end
+
 function View:move(delta)
   delta = tonumber(delta) or 0
   if self.pane == "categories" then

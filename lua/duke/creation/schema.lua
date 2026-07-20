@@ -131,6 +131,8 @@ function M.validate(kind, config, snapshot)
   errors.package_name = maven.validate_package(values.package_name)
   if blank(values.java_version) then
     errors.java_version = "Java target is required"
+  elseif snapshot.derived and snapshot.derived.runner_compatibility_error then
+    errors.java_version = snapshot.derived.runner_compatibility_error
   end
 
   if kind == "maven" and type(values.archetype) ~= "table" then
@@ -159,6 +161,21 @@ function M.validate(kind, config, snapshot)
     end
     if blank(values.spring_packaging) then
       errors.spring_packaging = "Spring packaging is required"
+    end
+    local catalog = snapshot.derived and snapshot.derived.spring_catalog
+    if type(catalog) ~= "table" or type(catalog.dependencies) ~= "table" then
+      errors.dependency_ids = "Spring dependency catalog is not ready"
+    else
+      local missing = {}
+      for _, id in ipairs(values.dependency_ids or {}) do
+        if not catalog.dependencies[id] then
+          missing[#missing + 1] = id
+        end
+      end
+      if #missing > 0 then
+        errors.dependency_ids = "Spring dependencies unavailable for selected Boot: "
+          .. table.concat(missing, ", ")
+      end
     end
   end
   return errors

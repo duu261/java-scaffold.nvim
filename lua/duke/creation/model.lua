@@ -113,8 +113,18 @@ function Model:resolve_async(token, patch)
   if not accepts(self, token) then
     return false
   end
-  for key, value in pairs(patch or {}) do
-    self.state.derived[key] = vim.deepcopy(value)
+  patch = patch or {}
+  if patch.values or patch.derived then
+    for key, value in pairs(patch.values or {}) do
+      self.state.values[key] = vim.deepcopy(value)
+    end
+    for key, value in pairs(patch.derived or {}) do
+      self.state.derived[key] = vim.deepcopy(value)
+    end
+  else
+    for key, value in pairs(patch) do
+      self.state.derived[key] = vim.deepcopy(value)
+    end
   end
   self.state.async[token.key] = { state = "ready" }
   self.active_tokens[token.key] = nil
@@ -141,9 +151,22 @@ function Model:set_busy(value)
   return true
 end
 
+function Model:set_banner(message)
+  if self.state.closed then
+    return false
+  end
+  self.state.banner = message and tostring(message) or nil
+  return true
+end
+
 function Model:request()
   if self.state.closed or self.state.busy then
     return nil
+  end
+  for _, status in pairs(self.state.async) do
+    if status.state == "loading" then
+      return nil, { async = "discovery is still running" }
+    end
   end
   return require("duke.creation.schema").request(self.state.kind, self.config, self.state)
 end

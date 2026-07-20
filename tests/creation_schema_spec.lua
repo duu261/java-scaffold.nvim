@@ -85,7 +85,12 @@ describe("creation schema", function()
     values.spring_language = "java"
     values.spring_packaging = "jar"
 
-    local request = assert(schema.request("spring", config, { values = values, derived = {} }))
+    local request = assert(schema.request("spring", config, {
+      values = values,
+      derived = {
+        spring_catalog = { dependencies = { web = {}, ["data-jpa"] = {} } },
+      },
+    }))
 
     assert.same({
       url = config.spring.starter_url,
@@ -104,6 +109,26 @@ describe("creation schema", function()
       packaging = "jar",
       timeout = config.spring.timeout,
     }, request)
+  end)
+
+  it("blocks Spring requests without a compatible catalog", function()
+    local values = base_values()
+    values.name = "Service"
+    values.description = "API"
+    values.boot_version = "4.1.0"
+    values.dependency_ids = { "web", "missing" }
+    values.spring_project_type = { id = "maven-project", build = "maven" }
+    values.spring_language = "java"
+    values.spring_packaging = "jar"
+
+    local errors = schema.validate("spring", config, {
+      values = values,
+      derived = { spring_catalog = { dependencies = { web = {} } } },
+    })
+    assert.is_truthy(errors.dependency_ids:find("missing", 1, true))
+
+    errors = schema.validate("spring", config, { values = values, derived = {} })
+    assert.equals("Spring dependency catalog is not ready", errors.dependency_ids)
   end)
 
   it("reports field validation errors before request projection", function()

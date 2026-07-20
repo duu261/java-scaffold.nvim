@@ -31,6 +31,7 @@ describe("progress integration", function()
     temporary_directories[#temporary_directories + 1] = directory
     vim.fn.writefile(lines, vim.fs.joinpath(directory, "pom.xml"))
     vim.cmd.cd(vim.fn.fnameescape(directory))
+    vim.opt.runtimepath:prepend(original_cwd)
   end
 
   it("keeps managed resolution UI-free for headless callers", function()
@@ -117,53 +118,6 @@ describe("progress integration", function()
       ["org.springframework.boot:spring-boot-starter-web"] = "3.5.4",
     })
     assert.equals("done", terminal)
-  end)
-
-  it("finishes Spring metadata progress from the fetch callback", function()
-    local fetch_callback
-    local label
-    local terminal
-    package.loaded["duke.metadata"] = {
-      cache_path = function()
-        return "/tmp/cache"
-      end,
-      fetch_cached = function(_, _, _, callback)
-        fetch_callback = callback
-      end,
-      is_client = function()
-        return true
-      end,
-    }
-    package.loaded["duke.progress"] = {
-      task = function(value)
-        label = value
-        return {
-          done = function()
-            terminal = "done"
-          end,
-          fail = function()
-            terminal = "failed"
-          end,
-        }
-      end,
-    }
-
-    local advanced
-    local step = require("duke.wizard").spring_metadata_fetch({
-      spring = { metadata_url = "https://initializr.test" },
-    })
-    step({}, function(state)
-      advanced = state
-    end)
-
-    assert.equals("Loading Spring Initializr metadata", label)
-    assert.is_nil(terminal)
-    assert.is_nil(advanced)
-
-    fetch_callback(nil, { bootVersion = {} }, "remote")
-
-    assert.equals("done", terminal)
-    assert.is_not_nil(advanced)
   end)
 
   it("counts completed Maven Central checks and stops on completion", function()
