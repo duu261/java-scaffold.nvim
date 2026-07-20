@@ -482,12 +482,86 @@ function M.upgrade(opts, callback)
       fail(complete, { pom_path = path }, message)
       return
     end
-    if matches[1].version == opts.version then
+    local selected = matches[1]
+    local property_name = selected.version and selected.version:match("^%${([%w_.-]+)}$")
+    local source
+    if property_name then
+      local sources, sources_error =
+        require("duke.pom").dependency_version_sources(lines, dependencies)
+      if not sources then
+        fail(complete, { pom_path = path }, sources_error)
+        return
+      end
+      source = sources[selected]
+      if not source then
+        fail(complete, { pom_path = path }, "dependency version uses property " .. property_name)
+        return
+      end
+      if #source.consumers > 1 then
+        fail(
+          complete,
+          { pom_path = path },
+          "dependency version uses shared property "
+            .. property_name
+            .. "; use plan_upgrades to review all affected coordinates"
+        )
+        return
+      end
+      if #source.other_consumers > 0 then
+        fail(
+          complete,
+          { pom_path = path },
+          "dependency version property has other consumers: " .. property_name
+        )
+        return
+      end
+    end
+    if (source and source.version or selected.version) == opts.version then
       complete(mutation_result(path, false, 0, true))
       return
     end
-    local updated, update_error =
-      require("duke.pom").update_version(lines, matches[1], opts.version)
+    if property_name then
+      require("duke.change_plan").build({
+        pom_path = path,
+        changes = {
+          { coordinate = opts.group_id .. ":" .. opts.artifact_id, new_version = opts.version },
+        },
+      }, function(plan_error, descriptor)
+        local callback_ok, callback_error = pcall(function()
+          if plan_error then
+            fail(complete, { pom_path = path }, plan_error)
+            return
+          end
+          if #descriptor.shared_properties > 0 then
+            require("duke.change_plan").discard(descriptor)
+            fail(
+              complete,
+              { pom_path = path },
+              "dependency version became shared during upgrade; "
+                .. "use plan_upgrades to review all affected coordinates"
+            )
+            return
+          end
+          require("duke.change_plan").apply(descriptor, function(apply_error, result)
+            local apply_ok, apply_callback_error = pcall(function()
+              if apply_error then
+                fail(complete, { pom_path = path }, apply_error)
+                return
+              end
+              complete(mutation_result(path, true, 1, result.saved))
+            end)
+            if not apply_ok then
+              fail(complete, { pom_path = path }, apply_callback_error)
+            end
+          end)
+        end)
+        if not callback_ok then
+          fail(complete, { pom_path = path }, callback_error)
+        end
+      end)
+      return
+    end
+    local updated, update_error = require("duke.pom").update_version(lines, selected, opts.version)
     if update_error then
       fail(complete, { pom_path = path }, update_error)
       return
@@ -665,11 +739,20 @@ function M.outdated(opts, callback)
     local candidates = {}
     local managed_deps = {}
     local property_backed = 0
+    local version_sources = require("duke.pom").dependency_version_sources(lines, dependencies)
     for _, dependency in ipairs(dependencies) do
       if not dependency.version then
         managed_deps[#managed_deps + 1] = dependency
       elseif dependency.version:find("${", 1, true) then
-        property_backed = property_backed + 1
+        local source = version_sources and version_sources[dependency]
+        if source then
+          candidates[#candidates + 1] = vim.tbl_extend("force", vim.deepcopy(dependency), {
+            version = source.version,
+            property = source.property,
+          })
+        else
+          property_backed = property_backed + 1
+        end
       else
         candidates[#candidates + 1] = dependency
       end
@@ -752,6 +835,9 @@ function M.outdated(opts, callback)
                   current_version = dependency.version,
                   latest_version = latest,
                 }
+                if dependency.property then
+                  row.property = dependency.property
+                end
                 if dependency.managed then
                   row.managed = true
                   row.managing_parent = managing_parent_name

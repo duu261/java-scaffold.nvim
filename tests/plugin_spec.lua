@@ -546,11 +546,74 @@ describe("plugin surface", function()
     assert.is_truthy(table.concat(notices, "\n"):find("already uses version 1.0", 1, true))
   end)
 
-  it("rejects property and stale Maven dependency updates", function()
+  it("upgrades a shared property after confirming every affected dependency", function()
     local cwd = vim.fn.tempname()
     vim.fn.mkdir(cwd, "p")
     temporary_directories[#temporary_directories + 1] = cwd
     local pom_path = vim.fs.joinpath(cwd, "pom.xml")
+    local function pom_lines(version)
+      return {
+        "<project>",
+        "  <groupId>com.example</groupId>",
+        "  <artifactId>demo</artifactId>",
+        "  <version>1.0</version>",
+        "  <properties>",
+        "    <demo.version>" .. version .. "</demo.version>",
+        "  </properties>",
+        "  <dependencies>",
+        "    <dependency>",
+        "      <groupId>com.example</groupId>",
+        "      <artifactId>one</artifactId>",
+        "      <version>${demo.version}</version>",
+        "    </dependency>",
+        "    <dependency>",
+        "      <groupId>com.example</groupId>",
+        "      <artifactId>two</artifactId>",
+        "      <version>${demo.version}</version>",
+        "    </dependency>",
+        "  </dependencies>",
+        "</project>",
+      }
+    end
+    vim.fn.writefile(pom_lines("1.0"), pom_path)
+    vim.cmd.cd(vim.fn.fnameescape(cwd))
+    vim.opt.runtimepath:prepend(original_cwd)
+    vim.cmd("enew!")
+    local notices = {}
+    vim.notify = function(message)
+      notices[#notices + 1] = message
+    end
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, _, callback)
+        callback(nil, { "2.0", "1.0" })
+      end,
+    }
+    local confirmation
+    package.loaded["duke.picker"] = {
+      select_one = function(items, opts, callback)
+        if opts.prompt == "Update Maven dependency" then
+          callback(items[1])
+        else
+          callback("2.0")
+        end
+      end,
+      confirm = function(message)
+        confirmation = message
+        return true
+      end,
+    }
+    require("duke").update_dependency()
+
+    vim.wait(1000, function()
+      return table.concat(vim.fn.readfile(pom_path), "\n"):find("<demo.version>2.0", 1, true) ~= nil
+    end)
+    assert.matches("com.example:one", confirmation)
+    assert.matches("com.example:two", confirmation)
+    assert.same(pom_lines("2.0"), vim.fn.readfile(pom_path))
+    assert.is_truthy(table.concat(notices, "\n"):find("updated", 1, true))
+  end)
+
+  it("rejects a stale Maven dependency update", function()
     local function pom_lines(version)
       return {
         "<project>",
@@ -564,10 +627,7 @@ describe("plugin surface", function()
         "</project>",
       }
     end
-    vim.fn.writefile(pom_lines("${demo.version}"), pom_path)
-    vim.cmd.cd(vim.fn.fnameescape(cwd))
-    vim.opt.runtimepath:prepend(original_cwd)
-    vim.cmd("enew!")
+    local pom_path = open_pom(pom_lines("1.0"))
     local notices = {}
     vim.notify = function(message)
       notices[#notices + 1] = message
@@ -577,18 +637,6 @@ describe("plugin surface", function()
         callback(nil, { "2.0", "1.0" })
       end,
     }
-    package.loaded["duke.picker"] = {
-      select_one = function(items, _, callback)
-        callback(items[1])
-      end,
-    }
-
-    require("duke").update_dependency()
-    assert.is_truthy(table.concat(notices, "\n"):find("demo.version", 1, true))
-    assert.same(pom_lines("${demo.version}"), vim.fn.readfile(pom_path))
-
-    notices = {}
-    vim.fn.writefile(pom_lines("1.0"), pom_path)
     package.loaded["duke.picker"] = {
       select_one = function(items, opts, callback)
         if opts.prompt == "Update Maven dependency" then
@@ -734,6 +782,44 @@ describe("plugin surface", function()
 
     assert.same({ "first", "limited" }, lookups)
     assert.is_truthy(table.concat(notices, "\n"):find("2 dependencies not checked", 1, true))
+    assert.same(original, vim.fn.readfile(pom_path))
+  end)
+
+  it("shows direct property-backed dependencies in the outdated picker", function()
+    local original = {
+      "<project>",
+      "  <properties>",
+      "    <library.version>1.0</library.version>",
+      "  </properties>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>com.example</groupId>",
+      "      <artifactId>library</artifactId>",
+      "      <version>${library.version}</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local pom_path = open_pom(original)
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, _, callback)
+        callback(nil, { "2.0", "1.0" })
+      end,
+    }
+    package.loaded["duke.picker"] = {
+      format_dependency = format_dependency,
+      select_one = function(items, opts, callback)
+        assert.equals("Outdated Maven dependencies", opts.prompt)
+        assert.equals(1, #items)
+        assert.equals("1.0", items[1].dependency.version)
+        assert.equals("library.version", items[1].dependency.property)
+        assert.equals("com.example:library  1.0 -> 2.0", opts.format_item(items[1]))
+        callback(nil)
+      end,
+    }
+
+    require("duke").outdated_dependencies()
+
     assert.same(original, vim.fn.readfile(pom_path))
   end)
 

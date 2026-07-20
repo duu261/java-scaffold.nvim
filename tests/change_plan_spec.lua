@@ -128,6 +128,20 @@ describe("Opaque Maven change plans", function()
     assert.matches("unknown or expired", reused_err)
   end)
 
+  it("discards a declined plan before it can be applied", function()
+    local _, descriptor = wait_build({
+      pom_path = pom_path,
+      changes = { { coordinate = "org.slf4j:slf4j-api", new_version = "2.0.17" } },
+    })
+
+    assert.is_true(change_plan.discard(descriptor))
+    assert.is_false(change_plan.discard(descriptor))
+    local err = wait_apply(descriptor)
+
+    assert.matches("unknown or expired", err)
+    assert.equals(0, #events)
+  end)
+
   it("updates a loaded modified buffer without claiming a disk save", function()
     local buffer = vim.fn.bufadd(pom_path)
     vim.fn.bufload(buffer)

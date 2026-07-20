@@ -214,8 +214,11 @@ add({opts}, {callback})                       *duke.add()*
 upgrade({opts}, {callback})               *duke.upgrade()*
     Upgrade one unique root Maven dependency. opts requires pom_path,
     group_id, artifact_id, and version, where version is the new explicit
-    version. Managed, missing-version, property-backed, malformed, and
-    ambiguous duplicate dependencies are rejected.
+    version. A private direct-root dependency property is editable through a
+    canonical change plan. Shared properties are rejected so this
+    single-coordinate API never silently widens impact; use plan_upgrades()
+    to inspect and apply them. Managed, missing-version, chained-property,
+    malformed, and ambiguous duplicate dependencies are rejected.
 
 upgrade_parent({opts}, {callback})   *duke.upgrade_parent()*
     Upgrade the Spring Boot parent version. opts requires pom_path and
@@ -245,7 +248,8 @@ remove({opts}, {callback})                 *duke.remove()*
     returns saved = false. Write failures return ok = false.
 
 outdated({opts}, {callback})             *duke.outdated()*
-    Inspect literal explicit root Maven dependency versions sequentially.
+    Inspect literal explicit, direct-root property-backed, and resolved
+    managed Maven dependency versions sequentially.
     opts requires pom_path. Optional group_id and artifact_id filter one
     coordinate; provide both or neither. This operation never writes.
     Successful results add:
@@ -265,9 +269,9 @@ outdated({opts}, {callback})             *duke.outdated()*
         managing_parent = "spring-boot-starter-parent",  -- optional
       }
 <
-    Each dependency row may carry managed = true and a managing_parent field
-    when the version was resolved from a parent or BOM rather than an explicit
-    <version> element:
+    Each dependency row may carry property with the direct-root property name,
+    or managed = true and a managing_parent field when the version was
+    resolved from a parent or BOM rather than an explicit <version> element.
     dependencies contains only outdated rows. All-current succeeds with an
     empty list. A timeout or HTTP 429 after at least one completed lookup
     returns ok = true, partial rows, warning, and the exact unchecked count.
@@ -563,9 +567,12 @@ CREATION CENTER                                      *duke-creation-center*
     behavior when `mvn` is missing or the project fails to resolve. For
     explicit-version dependencies the behavior is unchanged: select one,
     then choose from Maven Central versions in newest-first order. The
-    current version is marked and selecting it is a no-op. Property-backed
-    versions are rejected with the property name. A final current-to-target
-    confirmation defaults to cancel before writing. Only version text changes;
+    current version is marked and selecting it is a no-op. Safe direct-root
+    property versions are resolved and edited through a canonical change
+    plan. If one property controls multiple dependencies, confirmation lists
+    every affected coordinate. Chained, missing, non-dependency-consumed, or
+    ambiguous properties are refused. A final current-to-target confirmation
+    defaults to cancel before writing. Only version text changes;
     scope and all other block content stay untouched. POM writes skip write
     autocommands, so a format-on-save chain cannot reformat the file around
     the edit and bury it in a whole-file diff. A manual :w still formats
@@ -588,13 +595,14 @@ CREATION CENTER                                      *duke-creation-center*
 
                                           *:DukeOutdated*
 :DukeOutdated
-    Find the nearest pom.xml and check root dependencies with literal
-    explicit or managed versions sequentially against Maven Central. Managed
-    versions are resolved by `mvn dependency:list` and marked with their
-    managing parent when available. If `mvn` is missing or the project fails
-    to resolve, managed dependencies degrade to the prior skipped-with-count
-    behavior and explicit-version rows still work. Property-backed versions
-    are skipped with counts. Timeout or HTTP 429 stops later lookups,
+    Find the nearest pom.xml and check root dependencies with literal,
+    direct-root property-backed, or managed versions sequentially against
+    Maven Central. Managed versions are resolved by `mvn dependency:list` and
+    marked with their managing parent when available. If `mvn` is missing or
+    the project fails to resolve, managed dependencies degrade to the prior
+    skipped-with-count behavior and explicit-version rows still work.
+    Missing, chained, or structurally ambiguous property versions are skipped
+    with counts. Timeout or HTTP 429 stops later lookups,
     preserves gathered rows, and reports the unchecked count. Rows show
     current -> latest. Selecting a managed row notifies about
     :DukeBootUpgrade and writes nothing. Selecting an explicit-version row

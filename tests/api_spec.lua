@@ -533,7 +533,7 @@ describe("programmatic API", function()
     assert.is_false(missing.changed)
   end)
 
-  it("rejects managed, property-backed, and duplicate upgrades", function()
+  it("rejects managed, unresolved property-backed, and duplicate upgrades", function()
     local blocks = {
       "    <dependency><groupId>bad</groupId><artifactId>compact</artifactId></dependency>",
       "    <dependency>",
@@ -568,6 +568,127 @@ describe("programmatic API", function()
       assert.is_false(result.ok)
     end
     assert.equals(before, table.concat(vim.fn.readfile(path), "\n"))
+  end)
+
+  it("upgrades a dependency backed by a private root property", function()
+    local path = pom({
+      "<project>",
+      "  <groupId>com.example</groupId>",
+      "  <artifactId>demo</artifactId>",
+      "  <version>1.0</version>",
+      "  <properties>",
+      "    <junit.version>4.12</junit.version>",
+      "  </properties>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>junit</groupId>",
+      "      <artifactId>junit</artifactId>",
+      "      <version>${junit.version}</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    })
+    local result = wait_result(function(callback)
+      require("duke").upgrade(
+        { pom_path = path, group_id = "junit", artifact_id = "junit", version = "4.13.2" },
+        callback
+      )
+    end)
+    assert.same({ ok = true, pom_path = path, changed = true, count = 1, saved = true }, result)
+    assert.matches(
+      "<junit%.version>4%.13%.2</junit%.version>",
+      table.concat(vim.fn.readfile(path), "\n")
+    )
+    local unchanged = wait_result(function(callback)
+      require("duke").upgrade(
+        { pom_path = path, group_id = "junit", artifact_id = "junit", version = "4.13.2" },
+        callback
+      )
+    end)
+    assert.same({ ok = true, pom_path = path, changed = false, count = 0, saved = true }, unchanged)
+  end)
+
+  it("refuses to widen a single upgrade through a shared property", function()
+    local path = pom({
+      "<project>",
+      "  <groupId>com.example</groupId>",
+      "  <artifactId>demo</artifactId>",
+      "  <version>1.0</version>",
+      "  <properties>",
+      "    <shared.version>1.0</shared.version>",
+      "  </properties>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>one</artifactId>",
+      "      <version>${shared.version}</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>two</artifactId>",
+      "      <version>${shared.version}</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    })
+    local before = vim.fn.readfile(path)
+    local result = wait_result(function(callback)
+      require("duke").upgrade(
+        { pom_path = path, group_id = "g", artifact_id = "one", version = "2.0" },
+        callback
+      )
+    end)
+    assert.is_false(result.ok)
+    assert.matches("shared property", result.error)
+    assert.matches("plan_upgrades", result.error)
+    assert.same(before, vim.fn.readfile(path))
+  end)
+
+  it("refuses shared impact discovered during single-upgrade plan construction", function()
+    local path = pom({
+      "<project>",
+      "  <groupId>com.example</groupId>",
+      "  <artifactId>demo</artifactId>",
+      "  <version>1.0</version>",
+      "  <properties>",
+      "    <one.version>1.0</one.version>",
+      "  </properties>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>one</artifactId>",
+      "      <version>${one.version}</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    })
+    local discarded = false
+    package.loaded["duke.change_plan"] = {
+      build = function(_, callback)
+        callback(nil, {
+          id = "changed-plan",
+          shared_properties = { { name = "one.version", consumers = { "g:one", "g:two" } } },
+        })
+      end,
+      discard = function(descriptor)
+        assert.equals("changed-plan", descriptor.id)
+        discarded = true
+      end,
+      apply = function()
+        error("shared plan must not apply")
+      end,
+    }
+
+    local result = wait_result(function(callback)
+      require("duke").upgrade(
+        { pom_path = path, group_id = "g", artifact_id = "one", version = "2.0" },
+        callback
+      )
+    end)
+
+    assert.is_false(result.ok)
+    assert.matches("became shared", result.error)
+    assert.is_true(discarded)
   end)
 
   local function boot_pom(version)
@@ -759,6 +880,44 @@ describe("programmatic API", function()
       )
     end)
     assert.same({}, filtered.dependencies)
+  end)
+
+  it("checks direct property-backed dependencies and reports their source", function()
+    local path = pom({
+      "<project>",
+      "  <groupId>com.example</groupId>",
+      "  <artifactId>demo</artifactId>",
+      "  <version>1.0</version>",
+      "  <properties>",
+      "    <library.version>1.0</library.version>",
+      "  </properties>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>library</artifactId>",
+      "      <version>${library.version}</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    })
+    package.loaded["duke.maven_central"] = {
+      versions = function(_, _, callback)
+        callback(nil, { "2.0", "1.0" })
+      end,
+    }
+    local result = wait_result(function(callback)
+      require("duke").outdated({ pom_path = path }, callback)
+    end)
+    assert.equals(0, result.skipped.property_backed)
+    assert.same({
+      {
+        group_id = "g",
+        artifact_id = "library",
+        current_version = "1.0",
+        latest_version = "2.0",
+        property = "library.version",
+      },
+    }, result.dependencies)
   end)
 
   it("returns exact partial outdated state and fails before first result", function()

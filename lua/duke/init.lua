@@ -625,6 +625,44 @@ local function select_dependency_upgrade(pom_path, selected, available_versions)
       notify(dependency_label(selected) .. " already uses version " .. version)
       return
     end
+    if selected.property then
+      require("duke.change_plan").build({
+        pom_path = pom_path,
+        changes = { { coordinate = dependency_label(selected), new_version = version } },
+      }, function(plan_error, descriptor)
+        if plan_error then
+          notify_error(plan_error)
+          return
+        end
+        local affected = table.concat(descriptor.affected_coordinates, "\n")
+        if
+          not require("duke.picker").confirm(
+            string.format(
+              "Upgrade property %s?\n%s -> %s\nAffected dependencies:\n%s",
+              selected.property,
+              selected.version,
+              version,
+              affected
+            ),
+            "Upgrade"
+          )
+        then
+          require("duke.change_plan").discard(descriptor)
+          return
+        end
+        require("duke.change_plan").apply(descriptor, function(apply_error, result)
+          if apply_error then
+            notify_error(apply_error)
+            return
+          end
+          local suffix = result.saved and "" or " (buffer left unsaved)"
+          notify(
+            string.format("updated %s to version %s%s", dependency_label(selected), version, suffix)
+          )
+        end)
+      end)
+      return
+    end
     if
       not require("duke.picker").confirm(
         string.format(
@@ -669,8 +707,9 @@ local function select_dependency_upgrade(pom_path, selected, available_versions)
 end
 
 local function upgrade_dependency(pom_path, selected, available_versions)
-  local property = selected.version:match("^%${([%w_.-]+)}$")
-  if property then
+  local property = selected.property
+    or (selected.version and selected.version:match("^%${([%w_.-]+)}$"))
+  if property and not selected.property then
     notify_error("cannot update dependency version property " .. property)
     return
   end
@@ -703,11 +742,18 @@ function M.update_dependency()
     notify_error(list_error)
     return
   end
+  local version_sources = require("duke.pom").dependency_version_sources(lines, dependencies)
 
   local explicit = {}
   local managed_deps = {}
   for _, dependency in ipairs(dependencies) do
     if dependency.version then
+      local source = version_sources and version_sources[dependency]
+      if source and source.kind == "property" then
+        dependency.declared_version = dependency.version
+        dependency.version = source.version
+        dependency.property = source.property
+      end
       explicit[#explicit + 1] = dependency
     else
       managed_deps[#managed_deps + 1] = dependency
@@ -974,11 +1020,20 @@ function M.outdated_dependencies()
   local candidates = {}
   local managed_deps = {}
   local property_backed = 0
+  local version_sources = require("duke.pom").dependency_version_sources(lines, dependencies)
   for _, dependency in ipairs(dependencies) do
     if not dependency.version then
       managed_deps[#managed_deps + 1] = dependency
     elseif dependency.version:find("${", 1, true) then
-      property_backed = property_backed + 1
+      local source = version_sources and version_sources[dependency]
+      if source then
+        dependency.declared_version = dependency.version
+        dependency.version = source.version
+        dependency.property = source.property
+        candidates[#candidates + 1] = dependency
+      else
+        property_backed = property_backed + 1
+      end
     else
       candidates[#candidates + 1] = dependency
     end

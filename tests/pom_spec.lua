@@ -37,6 +37,40 @@ describe("POM editing", function()
     assert.equals("3.4.7", pom.spring_boot_version(lines))
   end)
 
+  it("resolves only literal direct-root dependency version properties", function()
+    local lines = {
+      "<project>",
+      "  <properties>",
+      "    <direct.version>1.2.3</direct.version>",
+      "    <chained.version>${direct.version}</chained.version>",
+      "  </properties>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>direct</artifactId>",
+      "      <version>${direct.version}</version>",
+      "    </dependency>",
+      "    <dependency>",
+      "      <groupId>g</groupId>",
+      "      <artifactId>chained</artifactId>",
+      "      <version>${chained.version}</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+    }
+    local dependencies = assert(pom.list(lines))
+    local sources = assert(pom.dependency_version_sources(lines, dependencies))
+
+    assert.same({
+      kind = "property",
+      property = "direct.version",
+      version = "1.2.3",
+      consumers = { "g:direct" },
+      other_consumers = { { kind = "other", line = 4 } },
+    }, sources[dependencies[1]])
+    assert.is_nil(sources[dependencies[2]])
+  end)
+
   it("inserts dependencies before root dependency close", function()
     local lines = {
       "<project>",

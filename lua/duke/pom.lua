@@ -953,6 +953,47 @@ local function annotate_property_uses(lines, properties, dependencies)
   end
 end
 
+function M.dependency_version_sources(lines, dependencies)
+  local properties, properties_err = property_structure(lines)
+  if not properties then
+    return nil, properties_err
+  end
+
+  for _, dependency in ipairs(dependencies) do
+    local property_name = dependency.version and dependency.version:match("^%${([%w_.-]+)}$")
+    local property = property_name and properties[property_name] or nil
+    if property then
+      property.consumers[#property.consumers + 1] = dependency.group_id
+        .. ":"
+        .. dependency.artifact_id
+    end
+  end
+  for _, property in pairs(properties) do
+    table.sort(property.consumers)
+  end
+  annotate_property_uses(lines, properties, dependencies)
+
+  local sources = {}
+  for _, dependency in ipairs(dependencies) do
+    if dependency.version then
+      local property_name = dependency.version:match("^%${([%w_.-]+)}$")
+      local property = property_name and properties[property_name] or nil
+      if property and not property.value:find("${", 1, true) then
+        sources[dependency] = {
+          kind = "property",
+          property = property_name,
+          version = property.value,
+          consumers = vim.deepcopy(property.consumers),
+          other_consumers = vim.deepcopy(property.other_consumers),
+        }
+      elseif not property_name then
+        sources[dependency] = { kind = "dependency", version = dependency.version }
+      end
+    end
+  end
+  return sources
+end
+
 function M.model(lines)
   local fields, fields_err = reactor_structure(lines)
   if not fields then

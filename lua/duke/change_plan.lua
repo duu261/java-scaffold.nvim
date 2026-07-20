@@ -363,4 +363,13 @@ function M.apply(descriptor, callback)
   })
 end
 
+function M.discard(descriptor)
+  local id = type(descriptor) == "table" and descriptor.id or nil
+  if type(id) ~= "string" or not registry[id] then
+    return false
+  end
+  registry[id] = nil
+  return true
+end
+
 return M
