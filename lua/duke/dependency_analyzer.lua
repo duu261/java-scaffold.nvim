@@ -131,4 +131,182 @@ function M.paths(analysis, coordinate, module_id)
   return vim.deepcopy(analysis.paths[key(module_id, coordinate)] or {})
 end
 
+local function unique_sorted(values)
+  local seen = {}
+  local result = {}
+  for _, value in ipairs(values or {}) do
+    if value ~= nil and not seen[value] then
+      seen[value] = true
+      result[#result + 1] = value
+    end
+  end
+  table.sort(result)
+  return result
+end
+
+local function owner_for(rows, module_id, coordinate)
+  if module_id then
+    return rows[key(module_id, coordinate)]
+  end
+  local matches = {}
+  local identities = {}
+  for row_key, row in pairs(rows or {}) do
+    if row_key:sub(-#coordinate) == coordinate and row.coordinate == coordinate then
+      local identity = table.concat({ row.kind or "", row.pom_path or "", row.line or "" }, "\0")
+      if not identities[identity] then
+        identities[identity] = true
+        matches[#matches + 1] = row
+      end
+    end
+  end
+  if #matches == 1 then
+    return matches[1]
+  end
+end
+
+local function decorate(finding, rows, analysis)
+  local owner = owner_for(rows, finding.module_id, finding.coordinate)
+  finding.ownership = owner and vim.deepcopy(owner) or nil
+  finding.paths = finding.paths
+    or vim.deepcopy(
+      finding.module_id and analysis.paths[key(finding.module_id, finding.coordinate)] or {}
+    )
+  finding.consumers = owner and vim.deepcopy(owner.consumers or {}) or {}
+  finding.selected_version = finding.selected_version or (owner and owner.selected_version)
+  if finding.force_blocked then
+    finding.repairable = false
+  else
+    finding.repairable = owner ~= nil and owner.writable == true
+  end
+  if not finding.repairable and not finding.blocked_reason then
+    finding.blocked_reason = owner and owner.blocked_reason or "writable owner unavailable"
+  end
+  finding.force_blocked = nil
+  return finding
+end
+
+function M.repairable(analysis, ownership_rows, usage)
+  analysis = analysis or {}
+  ownership_rows = ownership_rows or {}
+  usage = usage or {}
+  local grouped = analysis.findings or {}
+  local findings = {}
+
+  for _, conflict in ipairs(grouped.conflicts or {}) do
+    findings[#findings + 1] = decorate({
+      kind = "version_conflict",
+      severity = "warning",
+      coordinate = conflict.coordinate,
+      module_id = conflict.module_id,
+      requested_versions = unique_sorted({ conflict.omitted, conflict.selected }),
+      selected_version = conflict.selected,
+      paths = conflict.path and { vim.deepcopy(conflict.path) } or nil,
+    }, ownership_rows, analysis)
+  end
+  for _, drift in ipairs(grouped.drift or {}) do
+    findings[#findings + 1] = decorate({
+      kind = "version_drift",
+      severity = "warning",
+      coordinate = drift.coordinate,
+      module_id = drift.module_id,
+      requested_versions = unique_sorted(drift.versions),
+    }, ownership_rows, analysis)
+  end
+  for _, duplicate in ipairs(grouped.duplicates or {}) do
+    findings[#findings + 1] = decorate({
+      kind = "duplicate_declaration",
+      severity = "info",
+      coordinate = duplicate.coordinate,
+      module_id = duplicate.module_id,
+      lines = vim.deepcopy(duplicate.lines or {}),
+      force_blocked = true,
+      blocked_reason = "duplicate declarations require manual resolution",
+    }, ownership_rows, analysis)
+  end
+  for _, unknown in ipairs(grouped.unknown or {}) do
+    findings[#findings + 1] = decorate({
+      kind = "unknown_ownership",
+      severity = "info",
+      coordinate = unknown.coordinate,
+      module_id = unknown.module_id,
+      force_blocked = true,
+    }, ownership_rows, analysis)
+  end
+
+  local mediated_seen = {}
+  for _, dependency in ipairs(analysis.dependencies or {}) do
+    local requested = dependency.raw_owner and dependency.raw_owner.version
+    if requested and dependency.version and requested ~= dependency.version then
+      local mediated_key = key(dependency.module_id, dependency.coordinate)
+      if not mediated_seen[mediated_key] then
+        mediated_seen[mediated_key] = true
+        findings[#findings + 1] = decorate({
+          kind = "mediated_version",
+          severity = "warning",
+          coordinate = dependency.coordinate,
+          module_id = dependency.module_id,
+          requested_versions = unique_sorted({ requested, dependency.version }),
+          selected_version = dependency.version,
+        }, ownership_rows, analysis)
+      end
+    end
+  end
+
+  local function add_usage(kind, severity, items)
+    for _, item in ipairs(items or {}) do
+      local coordinate = type(item) == "table" and item.coordinate or item
+      local module_id = type(item) == "table" and item.module_id or nil
+      findings[#findings + 1] = decorate({
+        kind = kind,
+        severity = severity,
+        coordinate = coordinate,
+        module_id = module_id,
+        force_blocked = true,
+        blocked_reason = module_id and "usage repair requires explicit action"
+          or "usage finding lacks module attribution",
+      }, ownership_rows, analysis)
+    end
+  end
+  add_usage("used_undeclared", "warning", usage.used_undeclared)
+  add_usage("unused_declared", "info", usage.unused_declared)
+
+  local severity_order = { error = 1, warning = 2, info = 3 }
+  table.sort(findings, function(left, right)
+    local left_severity = severity_order[left.severity] or 99
+    local right_severity = severity_order[right.severity] or 99
+    if left_severity ~= right_severity then
+      return left_severity < right_severity
+    end
+    if left.kind ~= right.kind then
+      return left.kind < right.kind
+    end
+    if left.coordinate ~= right.coordinate then
+      return left.coordinate < right.coordinate
+    end
+    return (left.module_id or "") < (right.module_id or "")
+  end)
+
+  local base_counts = {}
+  for _, finding in ipairs(findings) do
+    local base = finding.kind .. ":" .. finding.coordinate
+    base_counts[base] = (base_counts[base] or 0) + 1
+  end
+  local suffix_counts = {}
+  for _, finding in ipairs(findings) do
+    local base = finding.kind .. ":" .. finding.coordinate
+    if base_counts[base] == 1 then
+      finding.id = base
+    else
+      local suffix = finding.module_id or "reactor"
+      local candidate = base .. ":" .. suffix
+      suffix_counts[candidate] = (suffix_counts[candidate] or 0) + 1
+      finding.id = candidate
+      if suffix_counts[candidate] > 1 then
+        finding.id = candidate .. ":" .. suffix_counts[candidate]
+      end
+    end
+  end
+  return findings
+end
+
 return M

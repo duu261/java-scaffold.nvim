@@ -1,6 +1,8 @@
 local build = require("duke.build")
+local analyzer = require("duke.dependency_analyzer")
 local log = require("duke.log")
 local maven_model = require("duke.maven_model")
+local ownership = require("duke.maven_ownership")
 local process = require("duke.process")
 
 local M = {}
@@ -108,6 +110,39 @@ function M.inspect(snapshot, opts, callback)
     finish("Maven Doctor inspection failed", result)
   end
 
+  local function complete(enriched)
+    local existing = enriched.analysis or {}
+    local analyzed_ok, analyzed = pcall(analyzer.analyze, enriched)
+    if not analyzed_ok then
+      add_warning(enriched, "ownership analysis unavailable")
+      log.add("ERROR", "Maven Doctor dependency analysis failed: " .. tostring(analyzed))
+      finish(nil, enriched)
+      return
+    end
+    for name, value in pairs(analyzed) do
+      existing[name] = value
+    end
+    existing.doctor = enriched.analysis.doctor
+
+    local ownership_ok, rows = pcall(ownership.resolve, enriched)
+    if not ownership_ok then
+      add_warning(enriched, "ownership analysis unavailable")
+      log.add("ERROR", "Maven Doctor ownership analysis failed: " .. tostring(rows))
+      rows = {}
+    end
+    existing.ownership = rows
+
+    local findings_ok, findings = pcall(analyzer.repairable, analyzed, rows, existing.doctor.usage)
+    if not findings_ok then
+      add_warning(enriched, "repair analysis unavailable")
+      log.add("ERROR", "Maven Doctor repair analysis failed: " .. tostring(findings))
+      findings = {}
+    end
+    existing.findings = findings
+    enriched.analysis = existing
+    finish(nil, enriched)
+  end
+
   if type(snapshot) ~= "table" or snapshot.kind ~= "maven" then
     finish("Maven Doctor requires a Maven workspace snapshot")
     return
@@ -141,7 +176,7 @@ function M.inspect(snapshot, opts, callback)
     if not selected_ok then
       add_warning(enriched, "active profiles unavailable")
       log.add("ERROR", "Maven Doctor active profiles failed: " .. tostring(selected))
-      finish(nil, enriched)
+      complete(enriched)
       return
     end
 
@@ -165,7 +200,7 @@ function M.inspect(snapshot, opts, callback)
       end
 
       if not enriched.analysis.doctor.deep then
-        finish(nil, enriched)
+        complete(enriched)
         return
       end
 
@@ -178,7 +213,7 @@ function M.inspect(snapshot, opts, callback)
         else
           enriched.analysis.doctor.usage = parse_usage(deep_result.stdout)
         end
-        finish(nil, enriched)
+        complete(enriched)
       end, function(callback_err)
         fail_internal("dependency analysis callback", callback_err, enriched)
       end)

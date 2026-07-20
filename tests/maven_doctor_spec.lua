@@ -39,6 +39,21 @@ describe("Maven Doctor reports", function()
         return { command = "/workspace/mvnw", cwd = "/workspace" }
       end,
     }
+    package.loaded["duke.maven_ownership"] = {
+      resolve = function()
+        return { proof = true }
+      end,
+    }
+    package.loaded["duke.dependency_analyzer"] = {
+      analyze = function()
+        return { findings = {}, dependencies = {}, paths = {} }
+      end,
+      repairable = function(_, rows, usage)
+        assert.is_true(rows.proof)
+        assert.same({}, usage.used_undeclared)
+        return { { id = "doctor-proof", kind = "proof" } }
+      end,
+    }
     package.loaded["duke.log"] = {
       add = function(level, message)
         logs[#logs + 1] = { level = level, message = message }
@@ -70,6 +85,8 @@ describe("Maven Doctor reports", function()
     package.loaded["duke.build"] = nil
     package.loaded["duke.log"] = nil
     package.loaded["duke.process"] = nil
+    package.loaded["duke.maven_ownership"] = nil
+    package.loaded["duke.dependency_analyzer"] = nil
   end)
 
   it("reports active profiles through the wrapper and cleans output", function()
@@ -104,6 +121,8 @@ describe("Maven Doctor reports", function()
     assert.same({}, result.analysis.doctor.warnings)
     assert.is_false(result.analysis.doctor.deep)
     assert.is_true(result.analysis.existing)
+    assert.is_true(result.analysis.ownership.proof)
+    assert.equals("doctor-proof", result.analysis.findings[1].id)
     assert.is_nil(vim.uv.fs_stat(calls[1].args[5]:sub(10)))
   end)
 
@@ -260,5 +279,32 @@ describe("Maven Doctor reports", function()
     assert.equals(1, count)
     assert.equals("Maven Doctor inspection failed", received_err)
     assert.matches("invalid Maven analysis state", logs[1].message)
+  end)
+
+  it("preserves analyzed evidence when ownership synthesis fails", function()
+    package.loaded["duke.maven_ownership"].resolve = function()
+      error("ownership failure detail")
+    end
+    package.loaded["duke.dependency_analyzer"].repairable = function(_, rows)
+      assert.same({}, rows)
+      return { { id = "blocked-proof", repairable = false } }
+    end
+    package.loaded["duke.maven_doctor"] = nil
+    doctor = require("duke.maven_doctor")
+    local result
+
+    doctor.inspect(snapshot(), {}, function(err, value)
+      assert.is_nil(err)
+      result = value
+    end)
+
+    assert.is_true(vim.wait(100, function()
+      return result ~= nil
+    end))
+    assert.equals("partial", result.state)
+    assert.equals("blocked-proof", result.analysis.findings[1].id)
+    assert.is_false(result.analysis.findings[1].repairable)
+    assert.same({ "ownership analysis unavailable" }, result.analysis.doctor.warnings)
+    assert.matches("ownership failure detail", logs[1].message)
   end)
 end)
