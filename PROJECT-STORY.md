@@ -31,7 +31,9 @@ Creation happens in private staging and promotes only after validation. POM edit
 
 I designed the product direction, Java and Neovim workflows, safety rules, scope, and release decisions. GPT-5.6 through Codex CLI was the primary implementation and verification collaborator.
 
-Codex traced behavior across Lua modules, proposed transaction boundaries, implemented features, constructed Plenary tests, investigated edge cases, ran live Maven and Gradle projects, synchronized README and vimdoc, and performed release checks. I kept asking whether each feature made Java workspace work safer or merely made the plugin bigger. I reviewed the real workflows, rejected weak assumptions and unnecessary scope, and retained authority over main, tags, and releases.
+I also brought an agent workflow of my own. I created the `nvim-plugin-maker` skill to teach Codex how I expect a Neovim plugin to be structured, tested, documented, and released. It encoded pure Lua boundaries, lazy loading, headless Plenary testing, safe asynchronous patterns, health checks, vimdoc, CI, and release discipline. My experience became repeatable guidance instead of being rediscovered in every session.
+
+We worked side by side. I supplied product ideas, real Java workflow friction, scope decisions, and product judgment. Codex traced behavior across Lua modules, advised on module seams and tradeoffs, proposed transaction boundaries, implemented features, constructed tests, investigated edge cases, ran live Maven and Gradle projects, synchronized README and vimdoc, and automated repetitive verification. I kept asking whether each feature made Java workspace work safer or merely made the plugin bigger. I reviewed the real workflows, rejected weak assumptions and unnecessary scope, and retained authority over main, tags, and releases.
 
 Each meaningful change had to satisfy repository invariants, not merely produce plausible Lua:
 
