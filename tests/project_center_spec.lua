@@ -56,9 +56,9 @@ describe("Java Project Center", function()
     )
     assert.is_table(vim.b[state.buf].duke_project_center_nodes)
     local refresh_mapping = vim.tbl_filter(function(mapping)
-      return mapping.lhs == "r"
+      return mapping.lhs == "r" or mapping.lhs == "u"
     end, vim.api.nvim_buf_get_keymap(state.buf, "n"))
-    assert.equals(1, #refresh_mapping)
+    assert.equals(2, #refresh_mapping)
 
     project_center.toggle({ path = root })
     assert.is_nil(project_center.state())

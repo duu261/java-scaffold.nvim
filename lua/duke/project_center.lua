@@ -85,7 +85,7 @@ local function render(snapshot, status)
     end
   end
   lines[#lines + 1] = ""
-  lines[#lines + 1] = "<CR> open  r resolve  / search  ? help  q close"
+  lines[#lines + 1] = "<CR> open  r resolve  u upgrade  / search  ? help  q close"
 
   vim.bo[center.buf].modifiable = true
   vim.api.nvim_buf_set_lines(center.buf, 0, -1, false, lines)
@@ -188,6 +188,91 @@ local function search_nodes()
   }, open_node)
 end
 
+local function show_plan_preview(descriptor)
+  local lines = { "Before", "" }
+  vim.list_extend(lines, descriptor.preview.before)
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "After"
+  lines[#lines + 1] = ""
+  vim.list_extend(lines, descriptor.preview.after)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype = "xml"
+  local width = math.max(20, math.min(100, vim.o.columns - 4))
+  local height = math.max(4, math.min(#lines, vim.o.lines - 4))
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
+    col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+    style = "minimal",
+    border = "single",
+    title = "Maven upgrade plan",
+    title_pos = "center",
+  })
+  return win
+end
+
+local function plan_upgrades()
+  local snapshot = center and center.snapshot
+  if not snapshot or snapshot.kind ~= "maven" or not snapshot.active_module then
+    vim.notify("duke.nvim: select an active Maven module before planning upgrades")
+    return
+  end
+  local module = module_by_id(snapshot, snapshot.active_module)
+  local choices = {}
+  for _, dependency in ipairs(snapshot.dependencies or {}) do
+    if dependency.module_id == snapshot.active_module and dependency.version then
+      choices[#choices + 1] = dependency
+    end
+  end
+  require("duke.picker").select_many(choices, {
+    prompt = "Plan Maven upgrades",
+    format_item = function(item)
+      return item.coordinate .. "  " .. item.version
+    end,
+  }, function(selected)
+    if not selected or #selected == 0 or not valid_buffer() then
+      return
+    end
+    local changes = {}
+    for _, dependency in ipairs(selected) do
+      changes[#changes + 1] = { coordinate = dependency.coordinate }
+    end
+    require("duke.api").plan_upgrades({
+      pom_path = module.build_file,
+      changes = changes,
+    }, function(err, descriptor)
+      if err or not valid_buffer() then
+        vim.notify("duke.nvim: " .. tostring(err), vim.log.levels.ERROR)
+        return
+      end
+      local preview = show_plan_preview(descriptor)
+      local confirmed = require("duke.picker").confirm(
+        string.format("Apply %d Maven version changes?", #descriptor.changes),
+        "Apply"
+      )
+      if vim.api.nvim_win_is_valid(preview) then
+        vim.api.nvim_win_close(preview, true)
+      end
+      if not confirmed then
+        return
+      end
+      require("duke.api").apply_plan(descriptor, function(apply_err)
+        if apply_err then
+          vim.notify("duke.nvim: " .. apply_err, vim.log.levels.ERROR)
+          return
+        end
+        vim.notify("duke.nvim: Maven upgrade plan applied")
+        refresh(false)
+      end)
+    end)
+  end)
+end
+
 local function set_keymaps(buf)
   local opts = { buffer = buf, silent = true, nowait = true }
   vim.keymap.set("n", "q", close, opts)
@@ -197,6 +282,7 @@ local function set_keymaps(buf)
   vim.keymap.set("n", "r", function()
     refresh(true)
   end, opts)
+  vim.keymap.set("n", "u", plan_upgrades, opts)
   vim.keymap.set("n", "?", show_help, opts)
   vim.keymap.set("n", "/", search_nodes, opts)
 end

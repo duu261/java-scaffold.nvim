@@ -856,6 +856,14 @@ local function property_structure(lines)
         if properties[node.name] then
           return nil, "duplicate project property " .. node.name .. " is not supported"
         end
+        local line_start = raw_xml:sub(1, node._start_byte - 1):match(".*\n()") or 1
+        local line_finish = raw_xml:find("\n", finish, true) or (#raw_xml + 1)
+        if
+          not raw_xml:sub(line_start, node._start_byte - 1):match("^%s*$")
+          or not raw_xml:sub(finish, line_finish - 1):match("^%s*$")
+        then
+          return nil, "project properties sharing lines with other XML are not supported"
+        end
 
         local leading = content:match("^(%s*)") or ""
         local trailing = content:match("(%s*)$") or ""
@@ -908,6 +916,41 @@ local function property_structure(lines)
     return nil, "pom.xml has unclosed elements"
   end
   return properties
+end
+
+local function annotate_property_uses(lines, properties, dependencies)
+  local xml = mask_comments(table.concat(lines, "\n"))
+  for name, property in pairs(properties) do
+    property.other_consumers = {}
+    local reference = "${" .. name .. "}"
+    local offset = 1
+    while true do
+      local first, last = xml:find(reference, offset, true)
+      if not first then
+        break
+      end
+      local known = false
+      for _, dependency in ipairs(dependencies) do
+        if
+          dependency.version == reference
+          and dependency._version_start
+          and first >= dependency._version_start
+          and last <= dependency._version_end
+        then
+          known = true
+          break
+        end
+      end
+      if not known then
+        local _, newlines = xml:sub(1, first - 1):gsub("\n", "\n")
+        property.other_consumers[#property.other_consumers + 1] = {
+          kind = "other",
+          line = newlines + 1,
+        }
+      end
+      offset = last + 1
+    end
+  end
 end
 
 function M.model(lines)
@@ -975,6 +1018,7 @@ function M.model(lines)
   for _, property in pairs(properties) do
     table.sort(property.consumers)
   end
+  annotate_property_uses(lines, properties, dependencies)
 
   return {
     coordinates = {

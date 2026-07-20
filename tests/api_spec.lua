@@ -53,6 +53,7 @@ describe("programmatic API", function()
       "duke",
       "duke.api",
       "duke.config",
+      "duke.change_plan",
       "duke.events",
       "duke.gradle",
       "duke.java",
@@ -88,6 +89,37 @@ describe("programmatic API", function()
     assert.is_function(duke.outdated)
     assert.is_function(duke.remove)
     assert.is_function(duke.inspect)
+    assert.is_function(duke.plan_upgrades)
+    assert.is_function(duke.apply_plan)
+  end)
+
+  it("delegates opaque plan build and apply without translating descriptors", function()
+    local descriptor = { id = "private-id", preview = {} }
+    package.loaded["duke.change_plan"] = {
+      build = function(opts, callback)
+        assert.equals("pom.xml", opts.pom_path)
+        callback(nil, descriptor)
+      end,
+      apply = function(received, callback)
+        assert.equals(descriptor, received)
+        callback(nil, { saved = true })
+      end,
+    }
+    local duke = require("duke")
+    local built
+    local applied
+
+    duke.plan_upgrades({ pom_path = "pom.xml", changes = {} }, function(err, result)
+      assert.is_nil(err)
+      built = result
+    end)
+    duke.apply_plan(descriptor, function(err, result)
+      assert.is_nil(err)
+      applied = result
+    end)
+
+    assert.equals(descriptor, built)
+    assert.is_true(applied.saved)
   end)
 
   it("exposes callback-based workspace inspection and validates options", function()

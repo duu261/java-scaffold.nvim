@@ -854,4 +854,20 @@ function M.inspect(opts, callback)
   require("duke.workspace").inspect(opts, callback)
 end
 
+function M.plan_upgrades(opts, callback)
+  if type(callback) ~= "function" then
+    log("ERROR", "programmatic plan_upgrades callback must be a function")
+    return
+  end
+  require("duke.change_plan").build(opts, callback)
+end
+
+function M.apply_plan(plan, callback)
+  if type(callback) ~= "function" then
+    log("ERROR", "programmatic apply_plan callback must be a function")
+    return
+  end
+  require("duke.change_plan").apply(plan, callback)
+end
+
 return M

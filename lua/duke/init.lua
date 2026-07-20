@@ -1555,4 +1555,12 @@ function M.project_center(opts)
   require("duke.project_center").toggle(opts)
 end
 
+function M.plan_upgrades(opts, callback)
+  require("duke.api").plan_upgrades(opts, callback)
+end
+
+function M.apply_plan(plan, callback)
+  require("duke.api").apply_plan(plan, callback)
+end
+
 return M
