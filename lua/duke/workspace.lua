@@ -3,6 +3,7 @@ local pom_file = require("duke.pom_file")
 local spring_config = require("duke.spring_config")
 
 local M = {}
+local generation = 0
 
 local function absolute(path)
   return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
@@ -267,13 +268,40 @@ end
 function M.inspect(opts, callback)
   opts = opts or {}
   assert(type(callback) == "function", "workspace callback is required")
+  generation = generation + 1
+  local current_generation = generation
+  local called = false
+  local function finish(err, result)
+    if called then
+      return
+    end
+    called = true
+    pcall(callback, err, result)
+  end
   vim.schedule(function()
     local ok, err, result = pcall(inspect_local, opts)
     if not ok then
-      pcall(callback, "workspace inspection failed: " .. tostring(err))
+      finish("workspace inspection failed: " .. tostring(err))
       return
     end
-    pcall(callback, err, result)
+    if err or not opts.resolve then
+      finish(err, result)
+      return
+    end
+    if result.kind ~= "maven" then
+      finish(nil, result)
+      return
+    end
+    require("duke.maven_model").enrich(result, opts, function(resolve_err, enriched)
+      if current_generation ~= generation then
+        finish("workspace inspection superseded by a newer refresh")
+        return
+      end
+      if enriched then
+        enriched.analysis = require("duke.dependency_analyzer").analyze(enriched)
+      end
+      finish(resolve_err, enriched)
+    end)
   end)
 end
 

@@ -51,6 +51,8 @@ describe("Java workspace discovery", function()
   before_each(function()
     package.loaded["duke.workspace"] = nil
     package.loaded["duke.spring_config"] = nil
+    package.loaded["duke.maven_model"] = nil
+    package.loaded["duke.dependency_analyzer"] = nil
     workspace = require("duke.workspace")
   end)
 
@@ -67,6 +69,8 @@ describe("Java workspace discovery", function()
     roots = {}
     package.loaded["duke.workspace"] = nil
     package.loaded["duke.spring_config"] = nil
+    package.loaded["duke.maven_model"] = nil
+    package.loaded["duke.dependency_analyzer"] = nil
   end)
 
   it("discovers a Maven reactor and active module from a Java file", function()
@@ -140,5 +144,30 @@ describe("Java workspace discovery", function()
       vim.fs.joinpath(root, "gradle", "libs.versions.toml"),
       result.environment.version_catalog
     )
+  end)
+
+  it("enriches Maven only when resolve is explicit", function()
+    local root = temp_dir()
+    write(vim.fs.joinpath(root, "pom.xml"), pom("com.acme", "app"))
+    local enrich_calls = 0
+    package.loaded["duke.maven_model"] = {
+      enrich = function(snapshot, _, callback)
+        enrich_calls = enrich_calls + 1
+        snapshot.state = "resolved"
+        callback(nil, snapshot)
+      end,
+    }
+    package.loaded["duke.dependency_analyzer"] = {
+      analyze = function()
+        return { findings = {} }
+      end,
+    }
+
+    local err, result = inspect({ path = root, resolve = true })
+
+    assert.is_nil(err)
+    assert.equals(1, enrich_calls)
+    assert.equals("resolved", result.state)
+    assert.same({ findings = {} }, result.analysis)
   end)
 end)
