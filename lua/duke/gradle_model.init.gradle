@@ -1,0 +1,18 @@
+gradle.projectsEvaluated {
+    def rows = gradle.rootProject.allprojects.sort { left, right -> left.path <=> right.path }.collect { project ->
+        def java = project.extensions.findByType(org.gradle.api.plugins.JavaPluginExtension)
+        if (java == null) {
+            return null
+        }
+        def languageVersion = java.toolchain.languageVersion.orNull
+        return "DUKE_JAVA_MODEL\t${project.path}\t${languageVersion ?: ''}\t${java.sourceCompatibility}\t${java.targetCompatibility}"
+    }.findAll { it != null }
+    rootProject.tasks.register("dukeWorkspaceIntelligenceJavaModelV1") {
+        group = "help"
+        description = "Reports effective Java model data without building the project."
+        inputs.property("dukeRows", rows)
+        doLast {
+            inputs.properties.dukeRows.each { println(it) }
+        }
+    }
+}

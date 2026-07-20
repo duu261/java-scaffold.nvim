@@ -152,6 +152,53 @@ describe("Java Project Center", function()
     assert.matches("Duplicate declarations  0", rendered)
   end)
 
+  it("renders partial Gradle diagnostics as single lines", function()
+    package.loaded["duke.workspace"] = {
+      inspect = function(_, callback)
+        callback(nil, {
+          root = root,
+          state = "partial",
+          kind = "gradle",
+          modules = {},
+          dependencies = {},
+          configuration = {},
+          diagnostics = {
+            {
+              severity = "warning",
+              message = "dependencies: FAILURE\nconfiguration missing",
+            },
+          },
+          analysis = {
+            projects = { { id = ":app", name = "app" } },
+            dependencies = {
+              {
+                coordinate = "com.acme:library",
+                project_id = ":app",
+                version = "1.0.0",
+                direct = true,
+              },
+            },
+          },
+        })
+      end,
+    }
+    package.loaded["duke.project_center"] = nil
+    project_center = require("duke.project_center")
+
+    assert.has_no.errors(function()
+      project_center.toggle({ path = root })
+    end)
+
+    local state = project_center.state()
+    local rendered = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
+    assert.equals("partial", rendered[2])
+    assert.is_truthy(
+      table
+        .concat(rendered, "\n")
+        :find("warning  dependencies: FAILURE configuration missing", 1, true)
+    )
+  end)
+
   it("lists every sidebar action in help", function()
     project_center.toggle({ path = root })
     assert.is_true(vim.wait(1000, function()

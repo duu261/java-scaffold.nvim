@@ -314,8 +314,12 @@ inspect([{opts}], {callback})                 *duke.inspect()*
     Local inspection never runs a build tool. Resolved Maven analysis records
     dependency paths, selected versions, duplicates, cross-module drift,
     conflicts when Maven emits them, and unknown ownership. Gradle refresh
-    records its version, project report, and recognized runtime and test
-    dependency lines. Partial output stays explicit.
+    records its version, project report, effective Java targets, installed
+    toolchain versions, and recognized project-scoped runtime and test
+    dependency lines. Gradle dependency entries include project_id,
+    configuration, requested_version, selected version, direct status, and
+    tree path. Partial output stays explicit, with multiline build-tool
+    failures collapsed to one diagnostic line in Project Center.
 
 plan_upgrades({opts}, {callback})       *duke.plan_upgrades()*
     Build a session-scoped Maven upgrade plan. opts requires pom_path and a

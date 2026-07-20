@@ -32,7 +32,7 @@ local function resolved_dependency_versions(snapshot)
   local versions = {}
   local analysis = snapshot and snapshot.analysis
   for _, dependency in ipairs((analysis and analysis.dependencies) or {}) do
-    if dependency.direct then
+    if dependency.direct and dependency.module_id then
       versions[dependency.module_id .. "\0" .. dependency.coordinate] = dependency.version
     end
   end
@@ -114,7 +114,9 @@ local function render(snapshot, status)
     lines[#lines + 1] = ""
     heading("Diagnostics", #(snapshot.diagnostics or {}))
     for _, item in ipairs(snapshot.diagnostics or {}) do
-      node(item.severity .. "  " .. item.message, {
+      local message =
+        tostring(item.message or "unknown diagnostic"):gsub("[\r\n]+", " "):gsub("%s+", " ")
+      node((item.severity or "warning") .. "  " .. message, {
         kind = "diagnostic",
         label = item.message,
       })
