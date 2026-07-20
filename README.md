@@ -36,6 +36,7 @@ Safely scaffold Maven, Gradle, and Spring Boot projects, manage and inspect Mave
 - Safe Maven dependency add, upgrade, outdated inspection, and removal workflows, with installed markers in add pickers.
 - Managed dependency version resolution through `mvn dependency:list` for `:DukeOutdated` and `:DukeUpgrade`; dependencies controlled by a parent or BOM show their resolved version instead of being hidden or skipped.
 - `:DukeTree` shows the resolved Maven dependency tree, while `:DukeWhy` isolates the paths that pull in a direct or transitive artifact and shows the version Maven selected.
+- Existing-project Maven inspection prefers an executable `mvnw` found beside or above the selected `pom.xml`, then falls back to the configured Maven command.
 - `:DukeInfo [groupId:artifactId]` shows latest and recent versions with release dates from Maven Central in a read-only scratch buffer.
 - `:DukeBootUpgrade` detects Spring Boot versions from parent POMs and from `spring-boot-dependencies` BOM imports in `<dependencyManagement>`, with BOM upgrades deferred.
 - Version pickers show Maven Central release dates and name the selected dependency in follow-up prompts.
@@ -168,7 +169,7 @@ require("duke").setup({
   java_homes = {}, -- optional version-to-JDK-home map
   entry_selector = nil, -- optional function(project_dir, detected_entry)
   maven = {
-    command = "mvn",
+    command = "mvn", -- project generation and existing-project fallback
     runner_java_version = "auto", -- active Java; separate from project target
     wrapper = false, -- generate Maven Wrapper before project promotion
     project_version = "1.0-SNAPSHOT",
@@ -276,6 +277,8 @@ For a plain Maven pom, `:DukeAdd` prompts for a Maven Central query and shows `g
 
 `:DukeTree` runs Maven's resolver against the nearest `pom.xml` and renders the resolved dependency tree in a read-only scratch buffer. `:DukeWhy [groupId:artifactId]` runs the same resolver with a coordinate filter, showing every ancestor path plus the version Maven selected. If a Maven version emits annotations such as `omitted for conflict with ...`, Duke preserves them, but modern Maven Dependency Plugin versions do not reliably emit omitted nodes. Without an argument, `:DukeWhy` offers root dependencies plus an option to type any transitive coordinate. Both commands show progress while Maven runs, are read-only, run Maven once, leave the POM and working directory unchanged, and keep failure detail in `:DukeLog`.
 
+Managed dependency resolution, `:DukeTree`, and `:DukeWhy` search upward from the selected POM for an executable Maven Wrapper. When found, Duke runs its absolute path while keeping the POM directory as the process working directory. Without a wrapper, `maven.command` remains the fallback.
+
 `:DukeModule` prompts for an artifact ID, then a package name pre-filled from the reactor's groupId, then confirms before adding a child module to the Maven reactor rooted at the current working directory. The parent `pom.xml` gains only the new `<module>` entry, created inside a fresh `<modules>` block when none exists. Canceling any prompt or the confirmation writes nothing. Only a root `pom.xml` with `<packaging>pom</packaging>` is eligible; a plain jar-packaging pom is rejected without creating a directory.
 
 No Boot versions are hardcoded into the picker. Old-version lookup happens only when the dependency command reads an existing `pom.xml`.
@@ -285,6 +288,25 @@ No Boot versions are hardcoded into the picker. Old-version lookup happens only 
 Without handoff, the plugin opens generated application Java source when available, then falls back to a build file. Opening Java naturally triggers the user's normal `nvim-jdtls`, `nvim-java`, or other filetype setup. Duke supplies project and dependency workflow around that language-server experience; it does not install or configure JDTLS.
 
 Successful creation emits `User DukeProjectCreated` with `data.project_dir` and `data.entry_file`.
+
+Successful dependency and module mutations emit `User DukeBuildChanged`. Event data contains `kind`, `root`, `build_file`, `operation`, and `saved`; dependency operations also contain `coordinates`, while module creation contains `module_dir`. `operation` is `add_dependency`, `upgrade_dependency`, `remove_dependency`, `upgrade_parent`, or `add_module`. No-op and failed mutations emit nothing. This optional hook keeps JDTLS ownership outside Duke:
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+  pattern = "DukeBuildChanged",
+  callback = function(args)
+    if not args.data.saved or vim.bo.filetype ~= "java" then
+      return
+    end
+    local ok, jdtls = pcall(require, "jdtls")
+    if ok then
+      jdtls.update_project_config()
+    end
+  end,
+})
+```
+
+`nvim-jdtls` refreshes the module owning the current Java buffer. Unsaved POM-buffer mutations report `saved = false`; save first, then refresh through your JDTLS setup.
 
 Optional handoff invokes any external project opener:
 

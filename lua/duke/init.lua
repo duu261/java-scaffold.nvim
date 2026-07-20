@@ -323,12 +323,22 @@ local function read_pom(path)
   return require("duke.pom_file").read(path)
 end
 
-local function save_pom(path, lines, buffer, was_modified)
+local function save_pom(path, lines, buffer, was_modified, event)
   local saved, err = require("duke.pom_file").save(path, lines, buffer, was_modified)
   if saved == nil then
     error(err)
   end
+  require("duke.events").build_changed(path, event.operation, {
+    coordinates = event.coordinates,
+    saved = saved,
+  })
   return saved
+end
+
+local function dependency_coordinates(dependencies)
+  return vim.tbl_map(function(dependency)
+    return dependency.group_id .. ":" .. dependency.artifact_id
+  end, dependencies)
 end
 
 local function installed_coordinates(lines)
@@ -422,7 +432,10 @@ local function insert_maven_dependencies(pom_path, selected)
     notify("selected dependencies already exist")
     return
   end
-  local saved = save_pom(pom_path, updated, buffer, was_modified)
+  local saved = save_pom(pom_path, updated, buffer, was_modified, {
+    operation = "add_dependency",
+    coordinates = dependency_coordinates(expected_added),
+  })
   local suffix = saved and "" or " (buffer left unsaved)"
   notify(added_message(added, expected_added, suffix))
 end
@@ -662,7 +675,10 @@ function M.add_dependency()
           notify("selected dependencies already exist")
           return
         end
-        local saved = save_pom(pom_path, updated, buffer, was_modified)
+        local saved = save_pom(pom_path, updated, buffer, was_modified, {
+          operation = "add_dependency",
+          coordinates = dependency_coordinates(expected_added),
+        })
         local suffix = saved and "" or " (buffer left unsaved)"
         notify(added_message(added, expected_added, suffix))
       end)
@@ -763,7 +779,10 @@ local function select_dependency_upgrade(pom_path, selected, available_versions)
       notify_error(update_error)
       return
     end
-    local saved = save_pom(pom_path, updated, buffer, was_modified)
+    local saved = save_pom(pom_path, updated, buffer, was_modified, {
+      operation = "upgrade_dependency",
+      coordinates = dependency_coordinates({ latest }),
+    })
     local suffix = saved and "" or " (buffer left unsaved)"
     notify(string.format("updated %s to version %s%s", dependency_label(latest), version, suffix))
   end)
@@ -1028,7 +1047,10 @@ function M.upgrade_boot_parent()
           notify_error(update_error)
           return
         end
-        local saved = save_pom(pom_path, updated, buffer, was_modified)
+        local saved = save_pom(pom_path, updated, buffer, was_modified, {
+          operation = "upgrade_parent",
+          coordinates = { "org.springframework.boot:spring-boot-starter-parent" },
+        })
         local suffix = saved and "" or " (buffer left unsaved)"
         notify("upgraded Spring Boot parent to " .. version .. suffix)
       end)
@@ -1284,7 +1306,10 @@ function M.remove_dependency()
       notify_error(remove_error)
       return
     end
-    local saved = save_pom(pom_path, updated, buffer, was_modified)
+    local saved = save_pom(pom_path, updated, buffer, was_modified, {
+      operation = "remove_dependency",
+      coordinates = dependency_coordinates(latest_selected),
+    })
     local suffix = saved and "" or " (buffer left unsaved)"
     notify(string.format("removed %d dependencies%s", removed, suffix))
   end)

@@ -89,10 +89,14 @@ end
 ---@param declared_managed table[]
 ---@param callback fun(err: string|nil, resolved: table<string,string>|nil)
 function M.resolve(pom_path, declared_managed, callback)
-  local pom_dir = vim.fn.fnamemodify(pom_path, ":h")
+  local config = require("duke.config").get().maven
+  local build = require("duke.build").maven(pom_path, config.command)
   local args = { "dependency:list", "-f", pom_path, "--batch-mode" }
 
-  require("duke.process").run("mvn", args, { cwd = pom_dir }, function(result)
+  require("duke.process").run(build.command, args, {
+    cwd = build.cwd,
+    timeout = config.timeout,
+  }, function(result)
     if result.code ~= 0 then
       local detail = vim.trim(result.stderr or "")
       if detail == "" then

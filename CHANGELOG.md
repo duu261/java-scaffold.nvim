@@ -8,6 +8,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 - `:DukeTree` renders Maven's resolved dependency tree and selected versions in a read-only scratch buffer, preserving any annotations Maven emits.
 - `:DukeWhy [groupId:artifactId]` shows the ancestor path for a direct or transitive dependency. Without an argument, root dependencies seed the picker and a typed-coordinate path remains available.
+- Successful dependency and module mutations emit `User DukeBuildChanged` with build root, build file, operation, and save-state data for optional tool integration.
+
+### Changed
+
+- Existing-project Maven resolution and dependency insight prefer an executable project Maven Wrapper, with `maven.command` as fallback.
 
 ## 0.9.0 - 2026-07-20
 

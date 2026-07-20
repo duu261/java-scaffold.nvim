@@ -13,10 +13,13 @@ describe("plugin surface", function()
   end)
 
   after_each(function()
+    pcall(vim.api.nvim_del_augroup_by_name, "DukePluginBuildChangedSpec")
     vim.notify = original_notify
     package.loaded["duke.api"] = nil
+    package.loaded["duke.build"] = nil
     package.loaded["duke.config"] = nil
     package.loaded["duke.dependency_insight"] = nil
+    package.loaded["duke.events"] = nil
     package.loaded["duke.gradle"] = nil
     package.loaded["duke.java"] = nil
     package.loaded["duke.log"] = nil
@@ -399,6 +402,15 @@ describe("plugin surface", function()
     vim.opt.runtimepath:prepend(original_cwd)
     vim.cmd("enew!")
     local received = {}
+    local events = {}
+    local group = vim.api.nvim_create_augroup("DukePluginBuildChangedSpec", { clear = true })
+    vim.api.nvim_create_autocmd("User", {
+      group = group,
+      pattern = "DukeBuildChanged",
+      callback = function(args)
+        events[#events + 1] = args.data
+      end,
+    })
     local notices = {}
     vim.notify = function(message)
       notices[#notices + 1] = message
@@ -499,6 +511,16 @@ describe("plugin surface", function()
     assert.is_truthy(
       table.concat(notices, "\n"):find("added com.google.guava:guava:33.4.7-jre [test]", 1, true)
     )
+    assert.same({
+      {
+        kind = "maven",
+        root = cwd,
+        build_file = pom_path,
+        operation = "add_dependency",
+        coordinates = { "com.google.guava:guava" },
+        saved = true,
+      },
+    }, events)
   end)
 
   it("cancels Maven Central insertion when scope selection is cancelled", function()

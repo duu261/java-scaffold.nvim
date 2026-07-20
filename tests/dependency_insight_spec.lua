@@ -81,6 +81,36 @@ describe("Maven dependency insight", function()
     assert.same({ JAVA_HOME = "/jdk/21" }, call.opts.env)
   end)
 
+  it("prefers the project Maven wrapper over the configured command", function()
+    local root = vim.fn.tempname()
+    local child = vim.fs.joinpath(root, "child")
+    local wrapper = vim.fs.joinpath(root, "mvnw")
+    local pom_path = vim.fs.joinpath(child, "pom.xml")
+    vim.fn.mkdir(child, "p")
+    vim.fn.writefile({ "#!/bin/sh" }, wrapper)
+    assert.equals(true, vim.uv.fs_chmod(wrapper, 493))
+    vim.fn.writefile({ "<project></project>" }, pom_path)
+
+    local call
+    package.loaded["duke.process"] = {
+      run = function(command, args, opts, callback)
+        call = { command = command, args = args, opts = opts }
+        callback({ code = 0, stdout = "[INFO] com.example:demo:jar:1.0\n", stderr = "" })
+      end,
+    }
+
+    local err
+    insight.inspect(pom_path, nil, { command = "mvnd" }, function(result_error)
+      err = result_error
+    end)
+
+    assert.is_nil(err)
+    assert.equals(wrapper, call.command)
+    assert.equals(child, call.opts.cwd)
+    assert.equals(pom_path, call.args[#call.args])
+    vim.fn.delete(root, "rf")
+  end)
+
   it("reports a missing coordinate plainly", function()
     package.loaded["duke.process"] = {
       run = function(_, _, _, callback)

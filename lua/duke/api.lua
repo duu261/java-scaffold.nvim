@@ -327,7 +327,7 @@ local function mutation_result(path, changed, count, saved)
   return { ok = true, pom_path = path, changed = changed, count = count, saved = saved }
 end
 
-local function save_mutation(complete, path, updated, buffer, was_modified, count)
+local function save_mutation(complete, path, updated, buffer, was_modified, count, event)
   if count == 0 then
     complete(mutation_result(path, false, 0, true))
     return
@@ -337,6 +337,10 @@ local function save_mutation(complete, path, updated, buffer, was_modified, coun
     fail(complete, { pom_path = path }, save_error)
     return
   end
+  require("duke.events").build_changed(path, event.operation, {
+    coordinates = event.coordinates,
+    saved = saved,
+  })
   complete(mutation_result(path, true, count, saved))
 end
 
@@ -398,7 +402,10 @@ function M.add(opts, callback)
       fail(complete, { pom_path = path }, insert_error)
       return
     end
-    save_mutation(complete, path, updated, buffer, was_modified, added)
+    save_mutation(complete, path, updated, buffer, was_modified, added, {
+      operation = "add_dependency",
+      coordinates = { opts.group_id .. ":" .. opts.artifact_id },
+    })
   end)
 end
 
@@ -426,6 +433,10 @@ function M.add_module(opts, callback)
         }, err)
         return
       end
+      require("duke.events").build_changed(result.parent_pom, "add_module", {
+        module_dir = result.module_dir,
+        saved = result.saved,
+      })
       complete({
         ok = true,
         parent_pom = result.parent_pom,
@@ -472,7 +483,10 @@ function M.upgrade(opts, callback)
       fail(complete, { pom_path = path }, update_error)
       return
     end
-    save_mutation(complete, path, updated, buffer, was_modified, 1)
+    save_mutation(complete, path, updated, buffer, was_modified, 1, {
+      operation = "upgrade_dependency",
+      coordinates = { opts.group_id .. ":" .. opts.artifact_id },
+    })
   end)
 end
 
@@ -520,7 +534,10 @@ function M.upgrade_parent(opts, callback)
       fail(complete, { pom_path = path }, update_error)
       return
     end
-    save_mutation(complete, path, updated, buffer, was_modified, 1)
+    save_mutation(complete, path, updated, buffer, was_modified, 1, {
+      operation = "upgrade_parent",
+      coordinates = { "org.springframework.boot:spring-boot-starter-parent" },
+    })
   end)
 end
 
@@ -555,7 +572,10 @@ function M.remove(opts, callback)
       fail(complete, { pom_path = path }, remove_error)
       return
     end
-    save_mutation(complete, path, updated, buffer, was_modified, removed)
+    save_mutation(complete, path, updated, buffer, was_modified, removed, {
+      operation = "remove_dependency",
+      coordinates = { opts.group_id .. ":" .. opts.artifact_id },
+    })
   end)
 end
 

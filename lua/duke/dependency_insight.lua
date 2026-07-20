@@ -54,6 +54,7 @@ end
 ---@param callback fun(err: string|nil, lines: string[]|nil)
 function M.inspect(pom_path, coordinate, opts, callback)
   opts = opts or {}
+  local build = require("duke.build").maven(pom_path, opts.command or "mvn")
   local args = {
     "dependency:tree",
     "-Dverbose",
@@ -65,9 +66,9 @@ function M.inspect(pom_path, coordinate, opts, callback)
   vim.list_extend(args, { "--batch-mode", "-f", pom_path })
 
   require("duke.process").run(
-    opts.command or "mvn",
+    build.command,
     args,
-    { cwd = vim.fs.dirname(pom_path), env = opts.env, timeout = opts.timeout },
+    { cwd = build.cwd, env = opts.env, timeout = opts.timeout },
     function(result)
       if result.code ~= 0 then
         require("duke.log").add("ERROR", "mvn dependency:tree failed: " .. failure_detail(result))

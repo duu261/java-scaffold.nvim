@@ -48,10 +48,12 @@ describe("programmatic API", function()
   end)
 
   after_each(function()
+    pcall(vim.api.nvim_del_augroup_by_name, "DukeApiBuildChangedSpec")
     for _, module in ipairs({
       "duke",
       "duke.api",
       "duke.config",
+      "duke.events",
       "duke.gradle",
       "duke.java",
       "duke.log",
@@ -379,6 +381,15 @@ describe("programmatic API", function()
 
   it("adds dependencies with safe scope and duplicate behavior", function()
     local path = pom(base_pom())
+    local events = {}
+    local group = vim.api.nvim_create_augroup("DukeApiBuildChangedSpec", { clear = true })
+    vim.api.nvim_create_autocmd("User", {
+      group = group,
+      pattern = "DukeBuildChanged",
+      callback = function(args)
+        events[#events + 1] = args.data
+      end,
+    })
     local duke = require("duke")
     local added = wait_result(function(callback)
       duke.add({
@@ -400,6 +411,17 @@ describe("programmatic API", function()
     end)
     assert.same({ ok = true, pom_path = path, changed = false, count = 0, saved = true }, duplicate)
     assert.equals(contents, table.concat(vim.fn.readfile(path), "\n"))
+    assert.same({
+      {
+        kind = "maven",
+        root = vim.fs.dirname(path),
+        build_file = path,
+        operation = "add_dependency",
+        coordinates = { "junit:junit" },
+        saved = true,
+      },
+    }, events)
+    vim.api.nvim_del_augroup_by_id(group)
   end)
 
   it("rejects invalid add requests without changing bytes", function()
@@ -584,7 +606,7 @@ describe("programmatic API", function()
         callback
       )
     end)
-    assert.is_true(clean.saved)
+    assert.is_true(clean.saved, vim.inspect(clean))
     vim.api.nvim_buf_set_lines(0, 1, 1, false, { "  <!-- unsaved -->" })
     local disk_before = table.concat(vim.fn.readfile(path), "\n")
     local modified = wait_result(function(callback)
@@ -931,6 +953,15 @@ describe("programmatic API", function()
 
   it("returns ok, module_dir, and parent_pom for a successful add_module", function()
     local reactor = temp_dir()
+    local events = {}
+    local group = vim.api.nvim_create_augroup("DukeApiBuildChangedSpec", { clear = true })
+    vim.api.nvim_create_autocmd("User", {
+      group = group,
+      pattern = "DukeBuildChanged",
+      callback = function(args)
+        events[#events + 1] = args.data
+      end,
+    })
     package.loaded["duke.maven_module"] = {
       create = function(opts, callback)
         callback(nil, {
@@ -948,6 +979,16 @@ describe("programmatic API", function()
     assert.is_true(result.ok)
     assert.equals(vim.fs.joinpath(reactor, "pom.xml"), result.parent_pom)
     assert.equals(vim.fs.joinpath(reactor, "child"), result.module_dir)
+    assert.same({
+      {
+        kind = "maven",
+        root = reactor,
+        build_file = vim.fs.joinpath(reactor, "pom.xml"),
+        operation = "add_module",
+        module_dir = vim.fs.joinpath(reactor, "child"),
+        saved = true,
+      },
+    }, events)
   end)
 
   it("returns ok=false and a string error when the core fails", function()

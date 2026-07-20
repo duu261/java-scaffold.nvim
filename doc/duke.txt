@@ -107,6 +107,10 @@ absolute paths, parent traversal, symlinks, and hardlinks are rejected.
 setup() is optional. Defaults apply when it is not called.
 All configured Spring Initializr URLs must use HTTPS. Curl permits only HTTPS
 for original requests and redirects.
+maven.command drives Maven project generation and is the fallback for
+existing-project inspection. Existing-project operations prefer an executable
+mvnw found beside or above the selected pom.xml. maven.wrapper controls wrapper
+generation for new Maven projects only.
 
 ==============================================================================
 3. PUBLIC API                                      *duke-api*
@@ -262,7 +266,7 @@ outdated({opts}, {callback})             *duke.outdated()*
     Failure before the first completed lookup returns ok = false. Ambiguous
     duplicate coordinates are rejected before lookup.
 
-    All six programmatic functions require a callback. Unknown option keys
+    All programmatic functions require a callback. Unknown option keys
     are ignored. Wrong types, missing required fields, unsupported enum
     values, and unknown project kinds return structured callback errors. Every
     result callback runs once on the Neovim main loop.
@@ -344,6 +348,29 @@ select_runtime([{opts}])              *duke.select_runtime()*
 Successful creation emits User DukeProjectCreated. Event data
 contains project_dir and entry_file. Handoff arguments may contain {project}
 and {file}; without placeholders, the project path is appended.
+
+Successful dependency and module mutations emit User DukeBuildChanged. Event
+data contains kind, root, build_file, operation, and saved. Dependency events
+also contain coordinates; module creation contains module_dir. No-op and
+failed mutations emit nothing. operation is add_dependency,
+upgrade_dependency, remove_dependency, upgrade_parent, or add_module. Example
+optional nvim-jdtls bridge:
+>
+  vim.api.nvim_create_autocmd("User", {
+    pattern = "DukeBuildChanged",
+    callback = function(args)
+      if not args.data.saved or vim.bo.filetype ~= "java" then
+        return
+      end
+      local ok, jdtls = pcall(require, "jdtls")
+      if ok then
+        jdtls.update_project_config()
+      end
+    end,
+  })
+<
+The nvim-jdtls refresh applies to the module owning the current Java buffer.
+Save an unsaved POM mutation before requesting a refresh.
 
 ==============================================================================
 4. COMMANDS                                      *duke-commands*
@@ -462,7 +489,8 @@ then choose [Done - N selected]. Both paths show the current selection count.
     current -> latest. Selecting a managed row notifies about
     :DukeBootUpgrade and writes nothing. Selecting an explicit-version row
     enters the DukeUpgrade version picker and stale-file-safe write path.
-    Canceling changes nothing.
+    Canceling changes nothing. Resolution prefers an executable mvnw found
+    beside or above pom.xml, then falls back to maven.command.
 
                                                *:DukeTree*
 :DukeTree
@@ -470,7 +498,9 @@ then choose [Done - N selected]. Both paths show the current selection count.
     the resolved tree and selected versions in a read-only scratch buffer.
     Any Maven annotations remain visible. Progress remains visible while Maven
     runs. The command does not write pom.xml or change the working directory.
-    Process failure detail stays in :DukeLog.
+    Process failure detail stays in :DukeLog. Maven execution prefers an
+    executable mvnw found beside or above pom.xml, then falls back to
+    maven.command.
 
                                                 *:DukeWhy*
 :DukeWhy [groupId:artifactId]
@@ -480,7 +510,8 @@ then choose [Done - N selected]. Both paths show the current selection count.
     Plugin versions do not reliably emit omitted nodes. Without an argument,
     choose a root dependency or enter any transitive groupId:artifactId
     coordinate. A coordinate absent from the resolved tree is reported plainly.
-    The command is read-only.
+    The command is read-only and uses the same wrapper-aware Maven execution
+    as |:DukeTree|.
 
                                            *:DukeRemove*
 :DukeRemove
