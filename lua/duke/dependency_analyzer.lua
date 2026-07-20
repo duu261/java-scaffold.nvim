@@ -45,6 +45,20 @@ function M.analyze(snapshot)
     paths = {},
   }
   local requested_versions = {}
+  local conflict_seen = {}
+
+  local function add_conflict(conflict)
+    local identity = table.concat({
+      conflict.module_id,
+      conflict.coordinate,
+      conflict.omitted,
+      conflict.selected,
+    }, "\0")
+    if not conflict_seen[identity] then
+      conflict_seen[identity] = true
+      analysis.findings.conflicts[#analysis.findings.conflicts + 1] = conflict
+    end
+  end
 
   for _, module in ipairs(snapshot.modules or {}) do
     analysis.modules[#analysis.modules + 1] = module.id
@@ -71,8 +85,12 @@ function M.analyze(snapshot)
     end
 
     local root = module.resolved and module.resolved.tree
+    local occurrences = {}
+    local marked_conflicts = {}
+    local traversal_order = 0
     local function walk(node, path, depth)
       for _, child in ipairs(node.children or {}) do
+        traversal_order = traversal_order + 1
         local child_path = vim.deepcopy(path)
         child_path[#child_path + 1] = child.coordinate
         local owners = declarations[child.coordinate]
@@ -98,6 +116,14 @@ function M.analyze(snapshot)
             or nil,
         }
         analysis.dependencies[#analysis.dependencies + 1] = entry
+        local coordinate_occurrences = occurrences[child.coordinate] or {}
+        coordinate_occurrences[#coordinate_occurrences + 1] = {
+          version = child.version,
+          depth = depth,
+          order = traversal_order,
+          path = child_path,
+        }
+        occurrences[child.coordinate] = coordinate_occurrences
         local paths = analysis.paths[key(module.id, child.coordinate)] or {}
         paths[#paths + 1] = child_path
         analysis.paths[key(module.id, child.coordinate)] = paths
@@ -106,19 +132,49 @@ function M.analyze(snapshot)
           analysis.findings.unknown[#analysis.findings.unknown + 1] = entry
         end
         if child.omitted_for_conflict or child.omittedForConflict then
-          analysis.findings.conflicts[#analysis.findings.conflicts + 1] = {
+          marked_conflicts[child.coordinate] = true
+          add_conflict({
             coordinate = child.coordinate,
             module_id = module.id,
             omitted = child.version,
             selected = child.omitted_for_conflict or child.omittedForConflict,
             path = child_path,
-          }
+          })
         end
         walk(child, child_path, depth + 1)
       end
     end
     if root then
       walk(root, { module.id }, 1)
+    end
+    for coordinate, entries in pairs(occurrences) do
+      if not marked_conflicts[coordinate] then
+        table.sort(entries, function(left, right)
+          if left.depth ~= right.depth then
+            return left.depth < right.depth
+          end
+          return left.order < right.order
+        end)
+        local selected = entries[1]
+        local omitted_versions = {}
+        for _, entry in ipairs(entries) do
+          if
+            entry.version ~= nil
+            and selected.version ~= nil
+            and entry.version ~= selected.version
+            and not omitted_versions[entry.version]
+          then
+            omitted_versions[entry.version] = true
+            add_conflict({
+              coordinate = coordinate,
+              module_id = module.id,
+              omitted = entry.version,
+              selected = selected.version,
+              path = entry.path,
+            })
+          end
+        end
+      end
     end
   end
 

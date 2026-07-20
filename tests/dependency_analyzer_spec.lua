@@ -146,6 +146,55 @@ describe("Dependency analyzer", function()
     }, findings[1].exclusion)
   end)
 
+  it("infers JSON tree conflicts when Maven omits conflict markers", function()
+    local snapshot = {
+      modules = {
+        {
+          id = "com.acme:app",
+          build_file = "/repo/pom.xml",
+          model = {
+            dependencies = {
+              { coordinate = "com.acme:first", version = "1.0.0", start_line = 8 },
+              { coordinate = "com.acme:second", version = "1.0.0", start_line = 13 },
+            },
+          },
+          resolved = {
+            tree = {
+              children = {
+                {
+                  coordinate = "com.acme:first",
+                  version = "1.0.0",
+                  children = {
+                    { coordinate = "com.acme:legacy", version = "2.0.0", children = {} },
+                  },
+                },
+                {
+                  coordinate = "com.acme:second",
+                  version = "1.0.0",
+                  children = {
+                    { coordinate = "com.acme:legacy", version = "1.0.0", children = {} },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+
+    local analysis = analyzer.analyze(snapshot)
+    local findings = analyzer.repairable(analysis, {}, {})
+    local conflict = vim.iter(findings):find(function(finding)
+      return finding.kind == "version_conflict"
+    end)
+
+    assert.is_not_nil(conflict)
+    assert.same({ "1.0.0", "2.0.0" }, conflict.requested_versions)
+    assert.equals("2.0.0", conflict.selected_version)
+    assert.is_true(conflict.repair_actions.exclude)
+    assert.equals("com.acme:second", conflict.exclusion.direct_coordinate)
+  end)
+
   it("normalizes repair evidence with unique deterministic IDs", function()
     local analysis = {
       findings = {
