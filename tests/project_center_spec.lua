@@ -625,6 +625,7 @@ describe("Java Project Center", function()
         callback(nil, {
           id = "diagnosis-1",
           state = "partial",
+          active_profiles = { "local-dev", "jdk-21" },
           warnings = { "active profiles unavailable", "usage unavailable" },
           findings = {
             {
@@ -665,6 +666,7 @@ describe("Java Project Center", function()
     local rendered = table.concat(vim.api.nvim_buf_get_lines(state.buf, 0, -1, false), "\n")
     assert.matches("Doctor  partial", rendered)
     assert.matches("Warnings %(2%)", rendered)
+    assert.is_truthy(rendered:find("Active profiles  local-dev, jdk-21", 1, true))
     assert.is_truthy(
       rendered:find("com.acme:library  requested 1.0.0, 2.0.0  selected 2.0.0", 1, true)
     )

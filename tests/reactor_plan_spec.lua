@@ -59,7 +59,7 @@ describe("reactor repair plans", function()
           },
         },
         analysis = {
-          doctor = { warnings = {}, deep = false },
+          doctor = { active_profiles = { "local-dev" }, warnings = {}, deep = false },
           findings = { finding },
         },
       }
@@ -117,6 +117,7 @@ describe("reactor repair plans", function()
     local diagnosis = assert(plans.capture(snapshot))
 
     assert.is_string(diagnosis.id)
+    assert.same({ "local-dev" }, diagnosis.active_profiles)
     assert.equals("pom.xml", diagnosis.findings[1].ownership.pom_label)
     assert.is_false(contains_private_path(diagnosis, root))
 

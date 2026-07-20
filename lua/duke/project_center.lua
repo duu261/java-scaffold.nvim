@@ -367,6 +367,11 @@ local function render(snapshot, status)
     end
     local diagnosis = doctor.diagnosis
     if diagnosis then
+      lines[#lines + 1] = "  Active profiles  "
+        .. (
+          #(diagnosis.active_profiles or {}) > 0 and table.concat(diagnosis.active_profiles, ", ")
+          or "none"
+        )
       heading("Warnings", #(diagnosis.warnings or {}))
       for _, warning in ipairs(diagnosis.warnings or {}) do
         lines[#lines + 1] = "  " .. tostring(warning):gsub("[\r\n]+", " ")

@@ -340,11 +340,11 @@ diagnose_workspace([{opts}], {callback})
     additionally runs dependency:analyze, which may compile main and test
     sources. Headless callers consent by setting that option.
 
-    The error-first callback receives an opaque diagnosis ID, state, concise
-    warnings, and normalized findings. Findings include stable IDs,
-    coordinates, requested and selected versions, paths, proven ownership,
-    consumers, repairability, and blocked reasons. Public ownership uses
-    relative POM labels. Canonical paths and complete POM contents remain
+    The error-first callback receives an opaque diagnosis ID, state, active
+    profile IDs, concise warnings, and normalized findings. Findings include
+    stable IDs, coordinates, requested and selected versions, paths, proven
+    ownership, consumers, repairability, and blocked reasons. Public ownership
+    uses relative POM labels. Canonical paths and complete POM contents remain
     private and session-scoped.
 
 plan_repairs({opts}, {callback})            *duke.plan_repairs()*
@@ -543,9 +543,10 @@ then choose [Done - N selected]. Both paths show the current selection count.
     active-profile reports. The ! form requests deep dependency usage analysis
     after confirmation; Maven may compile main and test sources.
 
-    Findings show requested and selected versions, paths, relative owner
-    labels and lines, shared consumers, and explicit blocked reasons. Repair
-    plans remain session-scoped and one-shot. Public previews omit canonical
+    Project Center shows active profile IDs. Findings show requested and
+    selected versions, paths, relative owner labels and lines, shared
+    consumers, and explicit blocked reasons. Repair plans remain session-scoped
+    and one-shot. Public previews omit canonical
     paths and complete POM contents. Apply performs a multi-POM transaction;
     press R afterward to compare selected finding IDs before and after.
 

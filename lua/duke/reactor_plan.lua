@@ -219,6 +219,10 @@ function M.capture(snapshot, opts)
       and snapshot.analysis.doctor
       and snapshot.analysis.doctor.warnings
     or {}
+  local active_profiles = snapshot.analysis
+      and snapshot.analysis.doctor
+      and snapshot.analysis.doctor.active_profiles
+    or {}
   return {
     id = id,
     kind = "maven",
@@ -226,6 +230,9 @@ function M.capture(snapshot, opts)
     root_label = vim.fs.basename(root),
     deep = snapshot.analysis and snapshot.analysis.doctor and snapshot.analysis.doctor.deep == true
       or false,
+    active_profiles = vim.tbl_map(function(profile)
+      return redacted_text(profile, root)
+    end, active_profiles),
     warnings = vim.tbl_map(function(warning)
       return redacted_text(warning, root)
     end, warnings),
